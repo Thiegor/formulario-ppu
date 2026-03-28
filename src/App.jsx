@@ -729,8 +729,22 @@ export default function App() {
   function updateExtras(fn) {
     setExtras(prev => {
       const next = fn(prev);
-      // auto-save desabilitado: salvar e feito exclusivamente pelo saveAndNext
-      // isso evita que o debounce dispare com saved desatualizado
+      // Auto-save debounced — usa setSaved callback para pegar saved mais recente
+      if (timerRef.current) clearTimeout(timerRef.current);
+      setSyncStatus("saving");
+      timerRef.current = setTimeout(() => {
+        setSaved(currentSaved => {
+          saveToSheets({
+            extras: next,
+            saved:  currentSaved,
+            ts: new Date().toISOString(),
+          }).then(() => {
+            setSyncStatus("ok");
+            setTimeout(() => setSyncStatus("idle"), 2500);
+          }).catch(() => setSyncStatus("error"));
+          return currentSaved;
+        });
+      }, 1500);
       return next;
     });
   }
@@ -759,17 +773,20 @@ export default function App() {
     const newSaved = [...saved];
     newSaved[idx] = true;
     setSaved(newSaved);
-    // Cancela qualquer auto-save pendente e salva imediatamente com saved correto
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
     setSyncStatus("saving");
-    saveToSheets({
-      extras: extras,
-      saved:  newSaved,
-      ts: new Date().toISOString(),
-    }).then(() => {
-      setSyncStatus("ok");
-      setTimeout(() => setSyncStatus("idle"), 2500);
-    }).catch(() => setSyncStatus("error"));
+    // Usa setExtras com callback para garantir que pegamos o estado mais recente
+    setExtras(currentExtras => {
+      saveToSheets({
+        extras: currentExtras,
+        saved:  newSaved,
+        ts: new Date().toISOString(),
+      }).then(() => {
+        setSyncStatus("ok");
+        setTimeout(() => setSyncStatus("idle"), 2500);
+      }).catch(() => setSyncStatus("error"));
+      return currentExtras; // nao altera o estado
+    });
     if(next!==null) go(next);
   };
 
