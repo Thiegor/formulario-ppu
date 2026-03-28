@@ -12,7 +12,8 @@ function getUserKey() {
   return k;
 }
 
-// POST para salvar — sem no-cors para garantir que o payload chega
+// POST com no-cors para salvar (CORS do Apps Script nao permite leitura da resposta)
+// O browser envia os dados mas nao consegue ler o retorno — isso e normal e esperado
 async function saveToSheets(payload) {
   if (!SHEETS_URL || SHEETS_URL.startsWith("COLE")) return;
   try {
@@ -23,13 +24,12 @@ async function saveToSheets(payload) {
       saved:  payload.saved,
     });
     console.log("[PPU] saveToSheets POST, salvos:", payload.saved ? payload.saved.filter(Boolean).length : 0);
-    const res = await fetch(SHEETS_URL, {
+    await fetch(SHEETS_URL, {
       method: "POST",
-      headers: { "Content-Type": "text/plain" },
+      mode: "no-cors",
       body: body,
     });
-    const data = await res.json();
-    console.log("[PPU] save response:", JSON.stringify(data));
+    console.log("[PPU] save enviado (no-cors)");
   } catch(e) { console.warn("[PPU] saveToSheets error:", e.message); }
 }
 
@@ -732,9 +732,8 @@ export default function App() {
   function updateExtras(fn) {
     setExtras(prev => {
       const next = fn(prev);
-      // nao chama persist aqui — salvar e feito pelo saveAndNext
-      // auto-save leve para nao perder digitacao (sem marcar como salvo)
-      persist(next, saved);
+      // auto-save desabilitado: salvar e feito exclusivamente pelo saveAndNext
+      // isso evita que o debounce dispare com saved desatualizado
       return next;
     });
   }
@@ -760,12 +759,11 @@ export default function App() {
   const go   = i => { setIdx(i); topRef.current?.scrollIntoView({behavior:"smooth"}); };
 
   const saveAndNext = () => {
-    // Calcula o novo saved com o item atual marcado como true
     const newSaved = [...saved];
     newSaved[idx] = true;
     setSaved(newSaved);
-    // Persiste imediatamente com extras atual + novo saved (sem debounce)
-    if (timerRef.current) clearTimeout(timerRef.current);
+    // Cancela qualquer auto-save pendente e salva imediatamente com saved correto
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
     setSyncStatus("saving");
     saveToSheets({
       extras: extras,
