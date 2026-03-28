@@ -12,11 +12,16 @@ function getUserKey() {
   return k;
 }
 
-// POST para salvar (suporta payloads grandes)
+// POST para salvar (extras e saved em colunas separadas para evitar limite de celula)
 async function saveToSheets(payload) {
   if (!SHEETS_URL || SHEETS_URL.startsWith("COLE")) return;
   try {
-    const body = JSON.stringify({ action: "save", user: getUserKey(), ...payload });
+    const body = JSON.stringify({
+      user:   getUserKey(),
+      ts:     payload.ts,
+      extras: payload.extras,
+      saved:  payload.saved,
+    });
     console.log("[PPU] saveToSheets POST, saved count:", payload.saved ? payload.saved.filter(Boolean).length : 0);
     await fetch(SHEETS_URL, {
       method: "POST",
@@ -682,17 +687,22 @@ export default function App() {
       setSyncStatus("loading");
       try {
         const d = await loadFromSheets();
+        console.log("[PPU] load keys:", d ? Object.keys(d) : null);
         if (d) {
-          if (d.extras) {
+          if (d.extras && Array.isArray(d.extras)) {
             const base = QUEUE.map((_,i) => d.extras[i] ? {...BLANK,...d.extras[i]} : {...BLANK});
             setExtras(base);
+            console.log("[PPU] extras loaded:", d.extras.length);
           }
-          if (d.saved) {
-            const baseSaved = QUEUE.map((_,i) => !!d.saved[i]);
+          if (d.saved && Array.isArray(d.saved)) {
+            const baseSaved = QUEUE.map((_,i) => d.saved[i] === true);
             setSaved(baseSaved);
+            console.log("[PPU] saved loaded:", d.saved.filter(Boolean).length, "itens");
+          } else {
+            console.log("[PPU] saved ausente ou invalido:", typeof d.saved, d.saved);
           }
         }
-      } catch(e) { console.warn("Erro ao carregar:", e); }
+      } catch(e) { console.warn("[PPU] Erro ao carregar:", e); }
       setSyncStatus("idle");
     }
     load();
