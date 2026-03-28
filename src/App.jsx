@@ -12,7 +12,7 @@ function getUserKey() {
   return k;
 }
 
-// POST para salvar (extras e saved em colunas separadas para evitar limite de celula)
+// POST para salvar — sem no-cors para garantir que o payload chega
 async function saveToSheets(payload) {
   if (!SHEETS_URL || SHEETS_URL.startsWith("COLE")) return;
   try {
@@ -732,6 +732,8 @@ export default function App() {
   function updateExtras(fn) {
     setExtras(prev => {
       const next = fn(prev);
+      // nao chama persist aqui — salvar e feito pelo saveAndNext
+      // auto-save leve para nao perder digitacao (sem marcar como salvo)
       persist(next, saved);
       return next;
     });
@@ -758,7 +760,21 @@ export default function App() {
   const go   = i => { setIdx(i); topRef.current?.scrollIntoView({behavior:"smooth"}); };
 
   const saveAndNext = () => {
-    updateSaved(p => { const n=[...p]; n[idx]=true; return n; });
+    // Calcula o novo saved com o item atual marcado como true
+    const newSaved = [...saved];
+    newSaved[idx] = true;
+    setSaved(newSaved);
+    // Persiste imediatamente com extras atual + novo saved (sem debounce)
+    if (timerRef.current) clearTimeout(timerRef.current);
+    setSyncStatus("saving");
+    saveToSheets({
+      extras: extras,
+      saved:  newSaved,
+      ts: new Date().toISOString(),
+    }).then(() => {
+      setSyncStatus("ok");
+      setTimeout(() => setSyncStatus("idle"), 2500);
+    }).catch(() => setSyncStatus("error"));
     if(next!==null) go(next);
   };
 
