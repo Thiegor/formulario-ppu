@@ -12,24 +12,25 @@ function getUserKey() {
   return k;
 }
 
-// POST com no-cors para salvar (CORS do Apps Script nao permite leitura da resposta)
-// O browser envia os dados mas nao consegue ler o retorno — isso e normal e esperado
+// Salva via GET para evitar bloqueio CORS do Apps Script no POST
 async function saveToSheets(payload) {
   if (!SHEETS_URL || SHEETS_URL.startsWith("COLE")) return;
   try {
-    const body = JSON.stringify({
-      user:   getUserKey(),
-      ts:     payload.ts,
-      extras: payload.extras,
-      saved:  payload.saved,
+    // Comprime saved: salva apenas os indices true em vez de 570 booleans
+    const savedIdx = (payload.saved || []).reduce((a,v,i) => { if(v) a.push(i); return a; }, []);
+    const chunk = JSON.stringify({
+      extras:   payload.extras,
+      savedIdx: savedIdx,
+      ts:       payload.ts,
     });
-    console.log("[PPU] saveToSheets POST, salvos:", payload.saved ? payload.saved.filter(Boolean).length : 0);
-    await fetch(SHEETS_URL, {
-      method: "POST",
-      mode: "no-cors",
-      body: body,
-    });
-    console.log("[PPU] save enviado (no-cors)");
+    const user = getUserKey();
+    const url  = SHEETS_URL
+      + "?action=save"
+      + "&user=" + encodeURIComponent(user)
+      + "&data=" + encodeURIComponent(chunk);
+    console.log("[PPU] saveToSheets GET, salvos:", savedIdx.length, "url size:", url.length);
+    await fetch(url, { mode: "no-cors" });
+    console.log("[PPU] save enviado");
   } catch(e) { console.warn("[PPU] saveToSheets error:", e.message); }
 }
 
@@ -45,9 +46,16 @@ async function loadFromSheets() {
     const text = await res.text();
     console.log("[PPU] response body:", text.slice(0,200));
     const data = JSON.parse(text);
-    const hasPayload = !!(data && data.payload);
-    console.log("[PPU] payload found:", hasPayload);
-    return hasPayload ? data.payload : null;
+    if (!data || !data.payload) return null;
+    const p = data.payload;
+    // Reconstroi saved a partir de savedIdx (array de indices)
+    if (p.savedIdx && Array.isArray(p.savedIdx)) {
+      const saved = new Array(570).fill(false);
+      p.savedIdx.forEach(i => { if(i >= 0 && i < saved.length) saved[i] = true; });
+      p.saved = saved;
+    }
+    console.log("[PPU] payload found: true");
+    return p;
   } catch(e) {
     console.error("[PPU] loadFromSheets error:", e.message);
     return null;
