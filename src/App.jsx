@@ -1,7 +1,14 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 
-// -- Cloudflare Worker proxy (resolve CORS do Apps Script) ----------------
-const WORKER_URL = "https://ppu-proxy.thiego-r-u.workers.dev";
+// -- Supabase (banco de dados) --------------------------------------------
+const SUPABASE_URL = "https://ldiqleigrdnhjoqrcjqg.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxkaXFsZWlncmRuaGpvcXJjanFnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ2NjAyOTUsImV4cCI6MjA5MDIzNjI5NX0.5lPoOTTdWPX5eVucFR4KtT2b_vO45wIeHv_9eDwQzJI";
+const SB_HEADERS = {
+  "Content-Type": "application/json",
+  "apikey": SUPABASE_KEY,
+  "Authorization": "Bearer " + SUPABASE_KEY,
+  "Prefer": "resolution=merge-duplicates",
+};
 
 function getUserKey() {
   let k = localStorage.getItem("ppu_user_key");
@@ -12,43 +19,41 @@ function getUserKey() {
   return k;
 }
 
-// POST via Worker — sem limite de tamanho, sem CORS
 async function saveToSheets(payload) {
   try {
-    const body = JSON.stringify({
-      action: "save",
-      user:   getUserKey(),
-      ts:     payload.ts,
+    const usuario = getUserKey();
+    const body = {
+      usuario,
+      ultimo_salvamento: payload.ts || new Date().toISOString(),
       extras: payload.extras,
       saved:  payload.saved,
-    });
-    console.log("[PPU] save POST via Worker, salvos:", payload.saved ? payload.saved.filter(Boolean).length : 0);
-    const res  = await fetch(WORKER_URL, {
+      progresso: (payload.saved ? payload.saved.filter(Boolean).length : 0) + " / " + (payload.saved ? payload.saved.length : 0),
+    };
+    console.log("[PPU] save Supabase, salvos:", body.progresso);
+    const res = await fetch(SUPABASE_URL + "/rest/v1/ppu_respostas", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: body,
+      headers: SB_HEADERS,
+      body: JSON.stringify(body),
     });
-    const data = await res.json();
-    console.log("[PPU] save response:", JSON.stringify(data));
-  } catch(e) { console.warn("[PPU] saveToSheets error:", e.message); }
+    console.log("[PPU] save status:", res.status);
+  } catch(e) { console.warn("[PPU] save error:", e.message); }
 }
 
-// GET via Worker para carregar
 async function loadFromSheets() {
   try {
-    const user = getUserKey();
-    const url  = WORKER_URL + "?action=load&user=" + encodeURIComponent(user);
-    console.log("[PPU] load GET via Worker");
-    const res  = await fetch(url);
-    const text = await res.text();
-    console.log("[PPU] response body:", text.slice(0, 200));
-    const data = JSON.parse(text);
-    if (!data || !data.payload) return null;
-    const p = data.payload;
-    console.log("[PPU] payload found: true, salvos:", p.saved ? p.saved.filter(Boolean).length : 0);
-    return p;
+    const usuario = getUserKey();
+    const url = SUPABASE_URL + "/rest/v1/ppu_respostas?usuario=eq." + encodeURIComponent(usuario) + "&select=extras,saved";
+    console.log("[PPU] load Supabase user:", usuario);
+    const res  = await fetch(url, { headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY } });
+    const rows = await res.json();
+    console.log("[PPU] rows:", rows.length);
+    if (!rows || rows.length === 0) return null;
+    const row = rows[0];
+    const saved = Array.isArray(row.saved) ? row.saved : null;
+    console.log("[PPU] payload found: true, salvos:", saved ? saved.filter(Boolean).length : 0);
+    return { extras: row.extras, saved };
   } catch(e) {
-    console.error("[PPU] loadFromSheets error:", e.message);
+    console.error("[PPU] load error:", e.message);
     return null;
   }
 }
@@ -729,7 +734,7 @@ export default function App() {
   function updateExtras(fn) {
     setExtras(prev => {
       const next = fn(prev);
-      // Auto-save debounced — usa setSaved callback para pegar saved mais recente
+      // Auto-save debounced - usa setSaved callback para pegar saved mais recente
       if (timerRef.current) clearTimeout(timerRef.current);
       setSyncStatus("saving");
       timerRef.current = setTimeout(() => {
