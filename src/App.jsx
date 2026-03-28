@@ -7,7 +7,7 @@ const SB_HEADERS = {
   "Content-Type": "application/json",
   "apikey": SUPABASE_KEY,
   "Authorization": "Bearer " + SUPABASE_KEY,
-  "Prefer": "resolution=merge-duplicates",
+  "Prefer": "resolution=merge-duplicates,return=minimal",
 };
 
 function getUserKey() {
@@ -30,7 +30,7 @@ async function saveToSheets(payload) {
       progresso: (payload.saved ? payload.saved.filter(Boolean).length : 0) + " / " + (payload.saved ? payload.saved.length : 0),
     };
     console.log("[PPU] save Supabase, salvos:", body.progresso);
-    const res = await fetch(SUPABASE_URL + "/rest/v1/ppu_respostas", {
+    const res = await fetch(SUPABASE_URL + "/rest/v1/ppu_respostas?on_conflict=usuario", {
       method: "POST",
       headers: SB_HEADERS,
       body: JSON.stringify(body),
