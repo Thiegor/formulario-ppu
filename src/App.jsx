@@ -796,6 +796,8 @@ export default function App() {
   };
 
   // Copia o preenchimento do item atual para o item destino escolhido
+  const handleEditFromDash = i => { setIdx(i); setPage(1); topRef.current?.scrollIntoView({behavior:"smooth"}); };
+
   function aplicarBase(destIdx) {
     updateExtras(p => {
       const n = [...p];
