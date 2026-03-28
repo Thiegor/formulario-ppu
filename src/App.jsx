@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 
-// -- Google Apps Script Web App ------------------------------------------
-const SHEETS_URL = "https://script.google.com/macros/s/AKfycby6dNFKW_ZfNA6swQeAQc7GaS_5gMTBHKuSYWxwaHBI4zWowcrqv5oykkg1B2k-1-sw/exec";
+// -- Cloudflare Worker proxy (resolve CORS do Apps Script) ----------------
+const WORKER_URL = "https://ppu-proxy.thiego-r-u.workers.dev";
 
 function getUserKey() {
   let k = localStorage.getItem("ppu_user_key");
@@ -12,73 +12,41 @@ function getUserKey() {
   return k;
 }
 
-// Salva via GET com diff comprimido — envia apenas itens preenchidos
+// POST via Worker — sem limite de tamanho, sem CORS
 async function saveToSheets(payload) {
-  if (!SHEETS_URL || SHEETS_URL.startsWith("COLE")) return;
   try {
-    const user = getUserKey();
-    // Salva apenas indices com qtd_executar preenchida ou mao_de_obra/equipamentos nao vazios
-    const diff = {};
-    (payload.extras || []).forEach((ex, i) => {
-      if (!ex) return;
-      const hasData = ex.qtd_executar || ex.linha_plan || ex.descricao_extra || ex.observacao ||
-        (ex.mao_de_obra && ex.mao_de_obra.some(r => r.funcao || r.meses || r.qtd)) ||
-        (ex.equipamentos && ex.equipamentos.some(r => r.item || r.qtd)) ||
-        (ex.insumos && ex.insumos.some(r => r.nome || r.qtd)) ||
-        (ex.materiais && ex.materiais.some(r => r.nome || r.qtd)) ||
-        (ex.subcontratadas && ex.subcontratadas.some(r => r.desc || r.qtd));
-      if (hasData) diff[i] = ex;
+    const body = JSON.stringify({
+      action: "save",
+      user:   getUserKey(),
+      ts:     payload.ts,
+      extras: payload.extras,
+      saved:  payload.saved,
     });
-    const savedIdx = (payload.saved || []).reduce((a,v,i) => { if(v) a.push(i); return a; }, []);
-    const chunk = JSON.stringify({ diff, savedIdx, ts: payload.ts });
-    const url = SHEETS_URL
-      + "?action=save"
-      + "&user=" + encodeURIComponent(user)
-      + "&data=" + encodeURIComponent(chunk);
-    console.log("[PPU] save GET, salvos:", savedIdx.length, "itens preenchidos:", Object.keys(diff).length, "url:", url.length, "chars");
-    if (url.length > 8000) {
-      console.warn("[PPU] URL muito longa (" + url.length + "), tentando salvar so savedIdx");
-      const fallback = SHEETS_URL
-        + "?action=save"
-        + "&user=" + encodeURIComponent(user)
-        + "&data=" + encodeURIComponent(JSON.stringify({ diff: {}, savedIdx, ts: payload.ts }));
-      await fetch(fallback, { mode: "no-cors" });
-    } else {
-      await fetch(url, { mode: "no-cors" });
-    }
-    console.log("[PPU] save enviado");
+    console.log("[PPU] save POST via Worker, salvos:", payload.saved ? payload.saved.filter(Boolean).length : 0);
+    const res  = await fetch(WORKER_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: body,
+    });
+    const data = await res.json();
+    console.log("[PPU] save response:", JSON.stringify(data));
   } catch(e) { console.warn("[PPU] saveToSheets error:", e.message); }
 }
 
+// GET via Worker para carregar
 async function loadFromSheets() {
-  if (!SHEETS_URL || SHEETS_URL.startsWith("COLE")) return null;
   try {
     const user = getUserKey();
-    const url  = SHEETS_URL + "?action=load&user=" + encodeURIComponent(user);
-    console.log("[PPU] loadFromSheets GET:", url.slice(0,80)+"...");
+    const url  = WORKER_URL + "?action=load&user=" + encodeURIComponent(user);
+    console.log("[PPU] load GET via Worker");
     const res  = await fetch(url);
-    console.log("[PPU] response status:", res.status, res.ok);
     const text = await res.text();
-    console.log("[PPU] response body:", text.slice(0,200));
+    console.log("[PPU] response body:", text.slice(0, 200));
     const data = JSON.parse(text);
     if (!data || !data.payload) return null;
     const p = data.payload;
-    // Reconstroi extras: começa com 570 BLANKs e aplica o diff
-    const BLANK_ITEM = {qtd_executar:"",linha_plan:"",status:"",descricao_extra:"",observacao:"",mao_de_obra:[],equipamentos:[],insumos:[],materiais:[],subcontratadas:[]};
-    const extras = new Array(570).fill(null).map(() => ({...BLANK_ITEM}));
-    if (p.diff) {
-      Object.entries(p.diff).forEach(([i, val]) => {
-        const idx = parseInt(i);
-        if (idx >= 0 && idx < extras.length) extras[idx] = {...BLANK_ITEM, ...val};
-      });
-    }
-    // Reconstroi saved a partir de savedIdx
-    const saved = new Array(570).fill(false);
-    if (p.savedIdx && Array.isArray(p.savedIdx)) {
-      p.savedIdx.forEach(i => { if(i >= 0 && i < saved.length) saved[i] = true; });
-    }
-    console.log("[PPU] payload found: true, salvos:", p.savedIdx ? p.savedIdx.length : 0, "preenchidos:", p.diff ? Object.keys(p.diff).length : 0);
-    return { extras, saved };
+    console.log("[PPU] payload found: true, salvos:", p.saved ? p.saved.filter(Boolean).length : 0);
+    return p;
   } catch(e) {
     console.error("[PPU] loadFromSheets error:", e.message);
     return null;
