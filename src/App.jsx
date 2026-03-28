@@ -22,14 +22,15 @@ async function saveToSheets(payload) {
       extras: payload.extras,
       saved:  payload.saved,
     });
-    console.log("[PPU] saveToSheets POST, saved count:", payload.saved ? payload.saved.filter(Boolean).length : 0);
-    await fetch(SHEETS_URL, {
+    console.log("[PPU] saveToSheets POST, salvos:", payload.saved ? payload.saved.filter(Boolean).length : 0);
+    const res = await fetch(SHEETS_URL, {
       method: "POST",
-      mode: "no-cors",
+      headers: { "Content-Type": "text/plain" },
       body: body,
     });
-    console.log("[PPU] save sent (no-cors, sem confirmacao de retorno)");
-  } catch(e) { console.warn("[PPU] saveToSheets error:", e); }
+    const data = await res.json();
+    console.log("[PPU] save response:", JSON.stringify(data));
+  } catch(e) { console.warn("[PPU] saveToSheets error:", e.message); }
 }
 
 // GET para carregar (Apps Script retorna JSON com CORS)
