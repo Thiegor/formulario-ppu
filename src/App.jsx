@@ -12,29 +12,44 @@ function getUserKey() {
   return k;
 }
 
-// Salva via GET para evitar bloqueio CORS do Apps Script no POST
+// Salva via GET com diff comprimido — envia apenas itens preenchidos
 async function saveToSheets(payload) {
   if (!SHEETS_URL || SHEETS_URL.startsWith("COLE")) return;
   try {
-    // Comprime saved: salva apenas os indices true em vez de 570 booleans
-    const savedIdx = (payload.saved || []).reduce((a,v,i) => { if(v) a.push(i); return a; }, []);
-    const chunk = JSON.stringify({
-      extras:   payload.extras,
-      savedIdx: savedIdx,
-      ts:       payload.ts,
-    });
     const user = getUserKey();
-    const url  = SHEETS_URL
+    // Salva apenas indices com qtd_executar preenchida ou mao_de_obra/equipamentos nao vazios
+    const diff = {};
+    (payload.extras || []).forEach((ex, i) => {
+      if (!ex) return;
+      const hasData = ex.qtd_executar || ex.linha_plan || ex.descricao_extra || ex.observacao ||
+        (ex.mao_de_obra && ex.mao_de_obra.some(r => r.funcao || r.meses || r.qtd)) ||
+        (ex.equipamentos && ex.equipamentos.some(r => r.item || r.qtd)) ||
+        (ex.insumos && ex.insumos.some(r => r.nome || r.qtd)) ||
+        (ex.materiais && ex.materiais.some(r => r.nome || r.qtd)) ||
+        (ex.subcontratadas && ex.subcontratadas.some(r => r.desc || r.qtd));
+      if (hasData) diff[i] = ex;
+    });
+    const savedIdx = (payload.saved || []).reduce((a,v,i) => { if(v) a.push(i); return a; }, []);
+    const chunk = JSON.stringify({ diff, savedIdx, ts: payload.ts });
+    const url = SHEETS_URL
       + "?action=save"
       + "&user=" + encodeURIComponent(user)
       + "&data=" + encodeURIComponent(chunk);
-    console.log("[PPU] saveToSheets GET, salvos:", savedIdx.length, "url size:", url.length);
-    await fetch(url, { mode: "no-cors" });
+    console.log("[PPU] save GET, salvos:", savedIdx.length, "itens preenchidos:", Object.keys(diff).length, "url:", url.length, "chars");
+    if (url.length > 8000) {
+      console.warn("[PPU] URL muito longa (" + url.length + "), tentando salvar so savedIdx");
+      const fallback = SHEETS_URL
+        + "?action=save"
+        + "&user=" + encodeURIComponent(user)
+        + "&data=" + encodeURIComponent(JSON.stringify({ diff: {}, savedIdx, ts: payload.ts }));
+      await fetch(fallback, { mode: "no-cors" });
+    } else {
+      await fetch(url, { mode: "no-cors" });
+    }
     console.log("[PPU] save enviado");
   } catch(e) { console.warn("[PPU] saveToSheets error:", e.message); }
 }
 
-// GET para carregar (Apps Script retorna JSON com CORS)
 async function loadFromSheets() {
   if (!SHEETS_URL || SHEETS_URL.startsWith("COLE")) return null;
   try {
@@ -48,14 +63,22 @@ async function loadFromSheets() {
     const data = JSON.parse(text);
     if (!data || !data.payload) return null;
     const p = data.payload;
-    // Reconstroi saved a partir de savedIdx (array de indices)
-    if (p.savedIdx && Array.isArray(p.savedIdx)) {
-      const saved = new Array(570).fill(false);
-      p.savedIdx.forEach(i => { if(i >= 0 && i < saved.length) saved[i] = true; });
-      p.saved = saved;
+    // Reconstroi extras: começa com 570 BLANKs e aplica o diff
+    const BLANK_ITEM = {qtd_executar:"",linha_plan:"",status:"",descricao_extra:"",observacao:"",mao_de_obra:[],equipamentos:[],insumos:[],materiais:[],subcontratadas:[]};
+    const extras = new Array(570).fill(null).map(() => ({...BLANK_ITEM}));
+    if (p.diff) {
+      Object.entries(p.diff).forEach(([i, val]) => {
+        const idx = parseInt(i);
+        if (idx >= 0 && idx < extras.length) extras[idx] = {...BLANK_ITEM, ...val};
+      });
     }
-    console.log("[PPU] payload found: true");
-    return p;
+    // Reconstroi saved a partir de savedIdx
+    const saved = new Array(570).fill(false);
+    if (p.savedIdx && Array.isArray(p.savedIdx)) {
+      p.savedIdx.forEach(i => { if(i >= 0 && i < saved.length) saved[i] = true; });
+    }
+    console.log("[PPU] payload found: true, salvos:", p.savedIdx ? p.savedIdx.length : 0, "preenchidos:", p.diff ? Object.keys(p.diff).length : 0);
+    return { extras, saved };
   } catch(e) {
     console.error("[PPU] loadFromSheets error:", e.message);
     return null;
@@ -707,8 +730,6 @@ export default function App() {
             const baseSaved = QUEUE.map((_,i) => d.saved[i] === true);
             setSaved(baseSaved);
             console.log("[PPU] saved loaded:", d.saved.filter(Boolean).length, "itens");
-          } else {
-            console.log("[PPU] saved ausente ou invalido:", typeof d.saved, d.saved);
           }
         }
       } catch(e) { console.warn("[PPU] Erro ao carregar:", e); }
