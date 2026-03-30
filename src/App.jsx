@@ -670,7 +670,271 @@ function PageDashboard({ saved, extras, onEdit }) {
   );
 }
 
-// - Main app -
+// -- Página 3: DRE --------------------------------------------------------
+const DEDUCAO = 0.1425;
+const SISTEMAS_ORDER = ["DIESEL 50 NVS","DIESEL 50 CIAS","DIESEL 500 NVS","DIESEL 500 CIAS",
+  "NAFTA","GLP","DILUENTES","PETROLEO","SLOP","EFLUENTES","OCREF","SCI",
+  "ESTRUTURA METALICA","GERAL","OUTROS","BENS"];
+
+function calcCustos(extra) {
+  if (!extra) return { mo: 0, op: 0 };
+  // Mão de obra
+  const mo = (extra.mao_de_obra||[]).reduce((s,r) => {
+    const m = MO_DATA.find(x => x.funcao === r.funcao);
+    const vm = r._manual ? (parseFloat(r.vunit_manual)||0) : (m ? m.valor_mes : 0);
+    return s + vm * (parseFloat(r.meses)||0) * (parseFloat(r.qtd)||0);
+  }, 0);
+  // Operacional: equipamentos
+  const eq = (extra.equipamentos||[]).reduce((s,r) => {
+    const e = EQ_DATA.find(x => x.item === r.item);
+    const vu = r._manual ? (parseFloat(r.vunit_manual)||0) : (e ? e.valor_unit : 0);
+    return s + vu * (parseFloat(r.qtd)||0);
+  }, 0);
+  // Insumos
+  const ins = (extra.insumos||[]).reduce((s,r) => {
+    const vu = r._manual ? (parseFloat(r.vunit_manual)||0) : (parseFloat(r.custo_unit)||0);
+    return s + vu * (parseFloat(r.qtd)||0);
+  }, 0);
+  // Materiais
+  const mat = (extra.materiais||[]).reduce((s,r) => {
+    const vu = r._manual ? (parseFloat(r.vunit_manual)||0) : (parseFloat(r.custo_unit)||0);
+    return s + vu * (parseFloat(r.qtd)||0);
+  }, 0);
+  // Subcontratadas
+  const sub_ = (extra.subcontratadas||[]).reduce((s,r) =>
+    s + (parseFloat(r.qtd)||0) * (parseFloat(r.vunit)||0), 0);
+  return { mo, op: eq + ins + mat + sub_ };
+}
+
+function DRELinha({ label, valor, pct, indent, bold, color, border }) {
+  const isZero = valor === 0 && pct === undefined;
+  return (
+    <div style={{
+      display:"grid", gridTemplateColumns:"1fr 160px 100px",
+      padding: indent ? "4px 16px 4px 32px" : "6px 16px",
+      borderTop: border ? `1px solid #1e3045` : "none",
+      background: bold ? "#0d1820" : "transparent",
+    }}>
+      <div style={{fontSize: bold?"0.78rem":"0.74rem", fontWeight: bold?700:400,
+        color: color || (bold ? tx : sub)}}>
+        {label}
+      </div>
+      <div style={{fontSize: bold?"0.78rem":"0.74rem", fontWeight: bold?700:400,
+        color: color || (isZero ? mut : bold ? tx : sub), textAlign:"right"}}>
+        {valor !== undefined ? (isZero ? "-" : "R$ " + fmtN(valor)) : ""}
+      </div>
+      <div style={{fontSize:"0.74rem", color: pct !== undefined ? (pct >= 0 ? "#4dcb8a" : "#c44a4a") : mut,
+        textAlign:"right", fontWeight: bold ? 700 : 400}}>
+        {pct !== undefined ? pct.toFixed(1) + "%" : ""}
+      </div>
+    </div>
+  );
+}
+
+function PageDRE({ extras }) {
+  const [filtroSis, setFiltroSis] = useState("TODOS");
+  const [expandidos, setExpandidos] = useState({});
+  const toggle = s => setExpandidos(p => ({...p,[s]:!p[s]}));
+
+  // Agrupa dados por sistema
+  const sistemas = {};
+  QUEUE.forEach((e, i) => {
+    const extra = extras[i] || {...BLANK};
+    const s = e.sistema;
+    if (!sistemas[s]) sistemas[s] = { items: [] };
+    const pm = PRICE_MAP[e.code];
+    const qtd = parseFloat(extra.qtd_executar) || parseFloat(e.qtd) || 0;
+    const recBruta = pm ? pm.price * qtd : 0;
+    const { mo, op } = calcCustos(extra);
+    sistemas[s].items.push({ ...e, extra, recBruta, mo, op });
+  });
+
+  // Agrega por sistema
+  const sisList = SISTEMAS_ORDER.filter(s => sistemas[s]);
+  const sisData = sisList.map(s => {
+    const items = sistemas[s].items;
+    const recBruta = items.reduce((a,x) => a + x.recBruta, 0);
+    const deducoes = recBruta * DEDUCAO;
+    const recLiq   = recBruta - deducoes;
+    const mo       = items.reduce((a,x) => a + x.mo, 0);
+    const op       = items.reduce((a,x) => a + x.op, 0);
+    const custo    = mo + op;
+    const margem   = recLiq - custo;
+    const margemPct = recLiq > 0 ? (margem / recLiq * 100) : 0;
+    return { s, recBruta, deducoes, recLiq, mo, op, custo, margem, margemPct, items };
+  });
+
+  // Consolidado
+  const filtrados = filtroSis === "TODOS" ? sisData : sisData.filter(d => d.s === filtroSis);
+  const total = filtrados.reduce((a,d) => ({
+    recBruta: a.recBruta + d.recBruta,
+    deducoes: a.deducoes + d.deducoes,
+    recLiq:   a.recLiq   + d.recLiq,
+    mo:       a.mo       + d.mo,
+    op:       a.op       + d.op,
+    custo:    a.custo    + d.custo,
+    margem:   a.margem   + d.margem,
+  }), {recBruta:0,deducoes:0,recLiq:0,mo:0,op:0,custo:0,margem:0});
+  const totalMargemPct = total.recLiq > 0 ? (total.margem / total.recLiq * 100) : 0;
+
+  return (
+    <div style={{maxWidth:960,margin:"0 auto",padding:"24px 16px"}}>
+
+      {/* Filtro */}
+      <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:20,flexWrap:"wrap"}}>
+        <div style={{fontSize:"0.68rem",fontWeight:700,color:mut,textTransform:"uppercase",letterSpacing:"0.1em"}}>Visão</div>
+        {["TODOS", ...sisList].map(s => (
+          <div key={s} onClick={()=>setFiltroSis(s)}
+            style={{padding:"4px 12px",borderRadius:20,cursor:"pointer",fontSize:"0.72rem",fontWeight:700,
+              background: filtroSis===s ? sc(s==="TODOS"?"GERAL":s)+"33" : "#0d1820",
+              border:`1px solid ${filtroSis===s ? sc(s==="TODOS"?"GERAL":s) : brd}`,
+              color: filtroSis===s ? sc(s==="TODOS"?"GERAL":s) : mut}}>
+            {s}
+          </div>
+        ))}
+      </div>
+
+      {/* DRE Consolidado */}
+      <div style={{background:card,border:`1px solid ${brd}`,borderRadius:10,marginBottom:20,overflow:"hidden"}}>
+        {/* Header */}
+        <div style={{background:"#040c14",padding:"10px 16px",display:"grid",gridTemplateColumns:"1fr 160px 100px",borderBottom:`1px solid ${brd}`}}>
+          <div style={{fontSize:"0.65rem",fontWeight:700,color:mut,textTransform:"uppercase",letterSpacing:"0.1em"}}>
+            {filtroSis==="TODOS" ? "CONSOLIDADO - TODOS OS SISTEMAS" : filtroSis}
+          </div>
+          <div style={{fontSize:"0.65rem",color:mut,textAlign:"right",textTransform:"uppercase",letterSpacing:"0.08em"}}>Valor (R$)</div>
+          <div style={{fontSize:"0.65rem",color:mut,textAlign:"right",textTransform:"uppercase",letterSpacing:"0.08em"}}>% R.Líq.</div>
+        </div>
+
+        <DRELinha label="Receita Bruta"            valor={total.recBruta} bold />
+        <DRELinha label="(-) Deduções (14,25%)"    valor={-total.deducoes} indent color="#c47e2e" />
+        <DRELinha label="Receita Líquida"           valor={total.recLiq}   bold border />
+        <DRELinha label="Custo Total"               valor={-total.custo}   bold border color={total.custo>0?"#c44a4a":mut} />
+        <DRELinha label="Custo Mão de Obra"         valor={-total.mo}      indent color={total.mo>0?"#c47e2e":mut} />
+        <DRELinha label="Custo Operacional"         valor={-total.op}      indent color={total.op>0?"#c47e2e":mut} />
+        <DRELinha label="Margem Bruta"              valor={total.margem}   bold border
+          color={total.margem>=0?"#4dcb8a":"#c44a4a"}
+          pct={totalMargemPct} />
+      </div>
+
+      {/* DRE por Sistema (expandível) */}
+      {filtroSis === "TODOS" && (
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {sisData.map(d => (
+            <div key={d.s} style={{background:card,border:`1px solid ${brd}`,borderRadius:10,overflow:"hidden"}}>
+              {/* Header sistema - clicável */}
+              <div onClick={()=>toggle(d.s)}
+                style={{padding:"10px 16px",cursor:"pointer",display:"grid",gridTemplateColumns:"1fr 160px 100px",
+                  background:"#040c14",borderBottom: expandidos[d.s] ? `1px solid ${brd}` : "none"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <div style={{width:8,height:8,borderRadius:"50%",background:sc(d.s)}} />
+                  <span style={{fontSize:"0.75rem",fontWeight:700,color:tx}}>{d.s}</span>
+                  <span style={{fontSize:"0.65rem",color:mut}}>{expandidos[d.s]?"▲":"▼"}</span>
+                </div>
+                <div style={{fontSize:"0.75rem",fontWeight:700,
+                  color:d.margem>=0?"#4dcb8a":"#c44a4a",textAlign:"right"}}>
+                  {d.recLiq>0 ? "R$ "+fmtN(d.margem) : "-"}
+                </div>
+                <div style={{fontSize:"0.75rem",fontWeight:700,
+                  color:d.margemPct>=0?"#4dcb8a":"#c44a4a",textAlign:"right"}}>
+                  {d.recLiq>0 ? d.margemPct.toFixed(1)+"%" : "-"}
+                </div>
+              </div>
+
+              {expandidos[d.s] && (
+                <>
+                  <DRELinha label="Receita Bruta"          valor={d.recBruta} bold />
+                  <DRELinha label="(-) Deduções (14,25%)"  valor={-d.deducoes} indent color="#c47e2e" />
+                  <DRELinha label="Receita Líquida"        valor={d.recLiq}   bold border />
+                  <DRELinha label="Custo Total"            valor={-d.custo}   bold border color={d.custo>0?"#c44a4a":mut} />
+                  <DRELinha label="Custo Mão de Obra"      valor={-d.mo}      indent color={d.mo>0?"#c47e2e":mut} />
+                  <DRELinha label="Custo Operacional"      valor={-d.op}      indent color={d.op>0?"#c47e2e":mut} />
+                  <DRELinha label="Margem Bruta"           valor={d.margem}   bold border
+                    color={d.margem>=0?"#4dcb8a":"#c44a4a"} pct={d.margemPct} />
+
+                  {/* Itens do sistema */}
+                  <div style={{borderTop:`1px solid ${brd}`,padding:"8px 16px",background:"#060e18"}}>
+                    <div style={{fontSize:"0.62rem",color:mut,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:6}}>
+                      Itens ({d.items.length})
+                    </div>
+                    <div style={{display:"grid",gridTemplateColumns:"60px 1fr 120px 100px 100px 100px",gap:4,marginBottom:4}}>
+                      {["Código","Serviço","Rec. Bruta","Custo MO","Custo Op.","Margem"].map(h => (
+                        <div key={h} style={{fontSize:"0.6rem",color:mut,textTransform:"uppercase",letterSpacing:"0.08em"}}>{h}</div>
+                      ))}
+                    </div>
+                    {d.items.map((it,i) => {
+                      const mBruta = it.recBruta - it.recBruta*DEDUCAO - it.mo - it.op;
+                      return (
+                        <div key={i} style={{display:"grid",gridTemplateColumns:"60px 1fr 120px 100px 100px 100px",
+                          gap:4,padding:"3px 0",borderTop:`1px solid ${brd}22`}}>
+                          <div style={{fontSize:"0.65rem",color:mut}}>{it.code}</div>
+                          <div style={{fontSize:"0.65rem",color:sub,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}
+                            title={it.label}>{it.label.slice(0,40)}</div>
+                          <div style={{fontSize:"0.65rem",color:it.recBruta>0?tx:mut,textAlign:"right"}}>
+                            {it.recBruta>0 ? "R$ "+fmtN(it.recBruta) : "-"}
+                          </div>
+                          <div style={{fontSize:"0.65rem",color:it.mo>0?"#c47e2e":mut,textAlign:"right"}}>
+                            {it.mo>0 ? "R$ "+fmtN(it.mo) : "-"}
+                          </div>
+                          <div style={{fontSize:"0.65rem",color:it.op>0?"#c47e2e":mut,textAlign:"right"}}>
+                            {it.op>0 ? "R$ "+fmtN(it.op) : "-"}
+                          </div>
+                          <div style={{fontSize:"0.65rem",fontWeight:700,textAlign:"right",
+                            color:mBruta>0?"#4dcb8a":mBruta<0?"#c44a4a":mut}}>
+                            {it.recBruta>0||it.mo>0||it.op>0 ? "R$ "+fmtN(mBruta) : "-"}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* DRE sistema filtrado - mostra itens diretamente */}
+      {filtroSis !== "TODOS" && filtrados.map(d => (
+        <div key={d.s} style={{background:card,border:`1px solid ${brd}`,borderRadius:10,overflow:"hidden"}}>
+          <div style={{background:"#060e18",padding:"8px 16px",borderTop:`1px solid ${brd}`}}>
+            <div style={{fontSize:"0.62rem",color:mut,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:6}}>
+              Itens ({d.items.length})
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"60px 1fr 120px 100px 100px 100px",gap:4,marginBottom:4}}>
+              {["Código","Serviço","Rec. Bruta","Custo MO","Custo Op.","Margem"].map(h => (
+                <div key={h} style={{fontSize:"0.6rem",color:mut,textTransform:"uppercase",letterSpacing:"0.08em"}}>{h}</div>
+              ))}
+            </div>
+            {d.items.map((it,i) => {
+              const mBruta = it.recBruta - it.recBruta*DEDUCAO - it.mo - it.op;
+              return (
+                <div key={i} style={{display:"grid",gridTemplateColumns:"60px 1fr 120px 100px 100px 100px",
+                  gap:4,padding:"3px 0",borderTop:`1px solid ${brd}22`}}>
+                  <div style={{fontSize:"0.65rem",color:mut}}>{it.code}</div>
+                  <div style={{fontSize:"0.65rem",color:sub,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}
+                    title={it.label}>{it.label.slice(0,40)}</div>
+                  <div style={{fontSize:"0.65rem",color:it.recBruta>0?tx:mut,textAlign:"right"}}>
+                    {it.recBruta>0 ? "R$ "+fmtN(it.recBruta) : "-"}
+                  </div>
+                  <div style={{fontSize:"0.65rem",color:it.mo>0?"#c47e2e":mut,textAlign:"right"}}>
+                    {it.mo>0 ? "R$ "+fmtN(it.mo) : "-"}
+                  </div>
+                  <div style={{fontSize:"0.65rem",color:it.op>0?"#c47e2e":mut,textAlign:"right"}}>
+                    {it.op>0 ? "R$ "+fmtN(it.op) : "-"}
+                  </div>
+                  <div style={{fontSize:"0.65rem",fontWeight:700,textAlign:"right",
+                    color:mBruta>0?"#4dcb8a":mBruta<0?"#c44a4a":mut}}>
+                    {it.recBruta>0||it.mo>0||it.op>0 ? "R$ "+fmtN(mBruta) : "-"}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 // Persistencia via Google Sheets - ver saveToSheets / loadFromSheets acima
 
 export default function App() {
@@ -679,10 +943,14 @@ export default function App() {
   const [extras, setExtras]       = useState(() => QUEUE.map(() => ({...BLANK})));
   const [saved, setSaved]         = useState(() => QUEUE.map(() => false));
   const [filter, setFilter]       = useState("ALL");
+  const [filterLocal, setFilterLocal] = useState("ALL");
+  const [filterCode, setFilterCode]   = useState("ALL");
   const [jumpTo, setJumpTo]       = useState("");
   const [syncStatus, setSyncStatus] = useState("loading");
-  const [baseModal, setBaseModal] = useState(false);  // modal "Usar como base"
-  const [baseSearch, setBaseSearch] = useState("");   // filtro dentro do modal
+  const [baseModal, setBaseModal] = useState(false);
+  const [baseSearch, setBaseSearch] = useState("");
+  const [baseSelected, setBaseSelected] = useState(new Set()); // indices selecionados no modal
+  const [baseSisFiltro, setBaseSisFiltro] = useState("ALL");   // filtro de sistema no modal
   const topRef    = useRef(null);
   const timerRef  = useRef(null);
 
@@ -766,8 +1034,30 @@ export default function App() {
   const ac  = sc(cur.sistema);
 
   const sistemas = ["ALL", ...[...new Set(QUEUE.map(e=>e.sistema))].sort()];
-  const visIdx = QUEUE.reduce((a,e,i) => { if(filter==="ALL"||e.sistema===filter) a.push(i); return a; },[]);
-  const pos = visIdx.indexOf(idx);
+
+  // Locais disponíveis para o sistema selecionado
+  const locaisDisponiveis = ["ALL", ...[...new Set(
+    QUEUE.filter(e => filter==="ALL" || e.sistema===filter)
+         .map(e => e.local||"(sem local)")
+  )].sort()];
+
+  // Itens disponíveis para sistema+local selecionados
+  const itensDisponiveis = ["ALL", ...[...new Set(
+    QUEUE.filter(e =>
+      (filter==="ALL" || e.sistema===filter) &&
+      (filterLocal==="ALL" || (e.local||"(sem local)")===filterLocal)
+    ).map(e => e.code)
+  )].sort()];
+
+  const visIdx = QUEUE.reduce((a,e,i) => {
+    if (filter!=="ALL" && e.sistema!==filter) return a;
+    if (filterLocal!=="ALL" && (e.local||"(sem local)")!==filterLocal) return a;
+    if (filterCode!=="ALL" && e.code!==filterCode) return a;
+    a.push(i);
+    return a;
+  }, []);
+
+  const pos  = visIdx.indexOf(idx);
   const prev = pos > 0 ? visIdx[pos-1] : null;
   const next = pos < visIdx.length-1 ? visIdx[pos+1] : null;
 
@@ -798,28 +1088,37 @@ export default function App() {
   // Copia o preenchimento do item atual para o item destino escolhido
   const handleEditFromDash = i => { setIdx(i); setPage(1); topRef.current?.scrollIntoView({behavior:"smooth"}); };
 
-  function aplicarBase(destIdx) {
+  // Copia o preenchimento do item atual para multiplos destinos
+  function aplicarBase(destIndices) {
+    const arr = Array.isArray(destIndices) ? destIndices : [destIndices];
     updateExtras(p => {
       const n = [...p];
-      n[destIdx] = { ...extras[idx] }; // copia tudo do atual
+      arr.forEach(di => { n[di] = { ...extras[idx] }; });
       return n;
     });
     setBaseModal(false);
     setBaseSearch("");
-    go(destIdx);
+    setBaseSelected(new Set());
+    setBaseSisFiltro("ALL");
+    if (arr.length === 1) go(arr[0]);
   }
 
   // Itens filtrados para o modal de base
   const baseFiltered = QUEUE
     .map((e,i) => ({...e, i}))
-    .filter(e => e.i !== idx && (
-      baseSearch === "" ||
-      e.sistema.toLowerCase().includes(baseSearch.toLowerCase()) ||
-      e.label.toLowerCase().includes(baseSearch.toLowerCase()) ||
-      e.descricao.toLowerCase().includes(baseSearch.toLowerCase()) ||
-      e.code.toLowerCase().includes(baseSearch.toLowerCase())
-    ))
-    .slice(0, 60);
+    .filter(e => {
+      if (e.i === idx) return false;
+      if (baseSisFiltro !== "ALL" && e.sistema !== baseSisFiltro) return false;
+      if (baseSearch === "") return true;
+      return (
+        e.sistema.toLowerCase().includes(baseSearch.toLowerCase()) ||
+        e.label.toLowerCase().includes(baseSearch.toLowerCase()) ||
+        e.descricao.toLowerCase().includes(baseSearch.toLowerCase()) ||
+        (e.local||"").toLowerCase().includes(baseSearch.toLowerCase()) ||
+        e.code.toLowerCase().includes(baseSearch.toLowerCase())
+      );
+    })
+    .slice(0, 120);
 
   const statusDot = {
     loading: {color:"#c47e2e", label:"Carregando..."},
@@ -871,7 +1170,7 @@ export default function App() {
           </div>
           {/* Abas */}
           <div style={{display:"flex",gap:0}}>
-            {[{n:1,lbl:"Pagina 1 - Levantamento"},{n:2,lbl:"Pagina 2 - Consolidado"}].map(t => (
+            {[{n:1,lbl:"Pagina 1 - Levantamento"},{n:2,lbl:"Pagina 2 - Consolidado"},{n:3,lbl:"Pagina 3 - DRE"}].map(t => (
               <div key={t.n} onClick={()=>setPage(t.n)}
                 style={{padding:"8px 20px",fontSize:"0.75rem",fontWeight:700,cursor:"pointer",borderBottom:`2px solid ${page===t.n?"#4dcb8a":"transparent"}`,color:page===t.n?"#4dcb8a":sub,transition:"all .15s",letterSpacing:"0.04em"}}>
                 {t.lbl}
@@ -886,16 +1185,59 @@ export default function App() {
         <PageDashboard saved={saved} extras={extras} onEdit={handleEditFromDash} />
       )}
 
+      {/* - Pagina 3 - DRE */}
+      {page === 3 && (
+        <PageDRE extras={extras} />
+      )}
+
       {/* - Pagina 1 - */}
       {page === 1 && (
         <div>
-          {/* Sub-header: filtro + jump */}
+          {/* Sub-header: filtro cascata + jump */}
           <div style={{background:"#040c14",borderBottom:`1px solid ${brd}`,padding:"8px 20px"}}>
             <div style={{maxWidth:900,margin:"0 auto",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-              <select value={filter} onChange={e=>{setFilter(e.target.value); const fi=QUEUE.findIndex(q=>e.target.value==="ALL"||q.sistema===e.target.value); if(fi>=0) setIdx(fi);}}
-                style={{background:"#1e3045",border:"none",borderRadius:6,padding:"5px 10px",color:tx,fontSize:"0.75rem",cursor:"pointer",outline:"none"}}>
+              {/* Sistema */}
+              <select value={filter} onChange={e=>{
+                setFilter(e.target.value);
+                setFilterLocal("ALL");
+                setFilterCode("ALL");
+                const fi=QUEUE.findIndex(q=>e.target.value==="ALL"||q.sistema===e.target.value);
+                if(fi>=0) setIdx(fi);
+              }} style={{background:"#1e3045",border:"none",borderRadius:6,padding:"5px 10px",color:tx,fontSize:"0.75rem",cursor:"pointer",outline:"none"}}>
                 {sistemas.map(s=><option key={s} value={s}>{s==="ALL"?"Todos os Sistemas":s}</option>)}
               </select>
+              {/* Local */}
+              {filter !== "ALL" && (
+                <select value={filterLocal} onChange={e=>{
+                  setFilterLocal(e.target.value);
+                  setFilterCode("ALL");
+                  const fi=QUEUE.findIndex(q=>
+                    q.sistema===filter &&
+                    (e.target.value==="ALL"||(q.local||"(sem local)")===e.target.value)
+                  );
+                  if(fi>=0) setIdx(fi);
+                }} style={{background:"#1e3045",border:"none",borderRadius:6,padding:"5px 10px",color:tx,fontSize:"0.75rem",cursor:"pointer",outline:"none"}}>
+                  {locaisDisponiveis.map(l=><option key={l} value={l}>{l==="ALL"?"Todos os Locais":l}</option>)}
+                </select>
+              )}
+              {/* Item (código) */}
+              {filterLocal !== "ALL" && (
+                <select value={filterCode} onChange={e=>{
+                  setFilterCode(e.target.value);
+                  const fi=QUEUE.findIndex(q=>
+                    q.sistema===filter &&
+                    (q.local||"(sem local)")===filterLocal &&
+                    (e.target.value==="ALL"||q.code===e.target.value)
+                  );
+                  if(fi>=0) setIdx(fi);
+                }} style={{background:"#1e3045",border:"none",borderRadius:6,padding:"5px 10px",color:tx,fontSize:"0.75rem",cursor:"pointer",outline:"none"}}>
+                  {itensDisponiveis.map(c=><option key={c} value={c}>{c==="ALL"?"Todos os Itens":c}</option>)}
+                </select>
+              )}
+              {/* Contador de itens filtrados */}
+              <div style={{fontSize:"0.65rem",color:mut}}>
+                {visIdx.length < QUEUE.length ? `${visIdx.length} itens` : ""}
+              </div>
               <div style={{display:"flex",gap:4,marginLeft:"auto"}}>
                 <Inp sx={{width:60,fontSize:"0.74rem",padding:"5px 8px"}} type="number" value={jumpTo} placeholder="nr" onChange={e=>setJumpTo(e.target.value)} onKeyDown={e=>e.key==="Enter"&&(()=>{const n=parseInt(jumpTo)-1; if(n>=0&&n<QUEUE.length){setIdx(n);setJumpTo("");topRef.current?.scrollIntoView({behavior:"smooth"});}})()}/>
                 <Btn v="g" sx={{padding:"5px 10px",fontSize:"0.74rem"}} onClick={()=>{const n=parseInt(jumpTo)-1; if(n>=0&&n<QUEUE.length){setIdx(n);setJumpTo("");topRef.current?.scrollIntoView({behavior:"smooth"});}}}>ir</Btn>
@@ -1024,50 +1366,113 @@ export default function App() {
         </div>
       )}
 
-      {/* Modal: Usar como base */}
+      {/* Modal: Usar como base - multi-select */}
       {baseModal && (
         <div style={{position:"fixed",inset:0,background:"#000a",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
-          <div style={{background:card,border:`1px solid ${brd}`,borderRadius:12,width:"100%",maxWidth:620,maxHeight:"80vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+          <div style={{background:card,border:`1px solid ${brd}`,borderRadius:12,width:"100%",maxWidth:680,maxHeight:"85vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+
+            {/* Header */}
             <div style={{padding:"14px 18px",borderBottom:`1px solid ${brd}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
               <div>
                 <div style={{fontSize:"0.85rem",fontWeight:700,color:tx}}>Usar como base</div>
                 <div style={{fontSize:"0.68rem",color:mut,marginTop:2}}>
-                  Copiando de: <span style={{color:ac,fontWeight:700}}>[{cur.code}] {cur.label.slice(0,40)}</span>
+                  Copiando de: <span style={{color:ac,fontWeight:700}}>[{cur.code}] {cur.label.slice(0,45)}</span>
                 </div>
               </div>
-              <Btn v="g" sx={{padding:"4px 10px",fontSize:"0.78rem"}} onClick={()=>setBaseModal(false)}>fechar</Btn>
+              <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                {baseSelected.size > 0 && (
+                  <Btn v="s" sx={{padding:"5px 14px",fontSize:"0.78rem"}}
+                    onClick={()=>aplicarBase([...baseSelected])}>
+                    Copiar para {baseSelected.size} item(s)
+                  </Btn>
+                )}
+                <Btn v="g" sx={{padding:"4px 10px",fontSize:"0.78rem"}} onClick={()=>{setBaseModal(false);setBaseSelected(new Set());setBaseSisFiltro("ALL");setBaseSearch("");}}>fechar</Btn>
+              </div>
             </div>
+
+            {/* Filtros */}
             <div style={{padding:"10px 18px",borderBottom:`1px solid ${brd}`,flexShrink:0}}>
-              <Inp
-                value={baseSearch}
-                placeholder="Filtrar por sistema, servico, codigo ou descricao..."
-                onChange={e=>setBaseSearch(e.target.value)}
-                sx={{fontSize:"0.8rem"}} />
-              <div style={{fontSize:"0.65rem",color:mut,marginTop:4}}>
-                {baseSearch===""?`Mostrando os primeiros 60 de ${QUEUE.length-1} itens - digite para filtrar`:`${baseFiltered.length} resultado(s)`}
+              {/* Filtro por sistema */}
+              <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
+                {["ALL",...[...new Set(QUEUE.map(e=>e.sistema))].sort()].map(s=>(
+                  <div key={s} onClick={()=>setBaseSisFiltro(s)}
+                    style={{padding:"2px 10px",borderRadius:20,cursor:"pointer",fontSize:"0.65rem",fontWeight:700,
+                      background:baseSisFiltro===s?sc(s==="ALL"?"GERAL":s)+"33":"#0d1820",
+                      border:`1px solid ${baseSisFiltro===s?sc(s==="ALL"?"GERAL":s):brd}`,
+                      color:baseSisFiltro===s?sc(s==="ALL"?"GERAL":s):mut}}>
+                    {s==="ALL"?"Todos":s}
+                  </div>
+                ))}
+              </div>
+              {/* Busca textual */}
+              <Inp value={baseSearch} placeholder="Buscar por codigo, servico, local ou descricao..."
+                onChange={e=>setBaseSearch(e.target.value)} sx={{fontSize:"0.8rem"}} />
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:5}}>
+                <div style={{fontSize:"0.65rem",color:mut}}>
+                  {baseFiltered.length} item(s) - {baseSelected.size} selecionado(s)
+                </div>
+                <div style={{display:"flex",gap:8}}>
+                  <div onClick={()=>setBaseSelected(new Set(baseFiltered.map(e=>e.i)))}
+                    style={{fontSize:"0.65rem",color:"#3b88c3",cursor:"pointer",textDecoration:"underline"}}>
+                    selecionar todos ({baseFiltered.length})
+                  </div>
+                  <div onClick={()=>setBaseSelected(new Set())}
+                    style={{fontSize:"0.65rem",color:mut,cursor:"pointer",textDecoration:"underline"}}>
+                    limpar
+                  </div>
+                </div>
               </div>
             </div>
+
+            {/* Lista com checkboxes */}
             <div style={{overflowY:"auto",flex:1}}>
-              {baseFiltered.map(e=>(
-                <div key={e.i}
-                  onClick={()=>aplicarBase(e.i)}
-                  style={{padding:"10px 18px",cursor:"pointer",borderBottom:`1px solid ${brd}22`,display:"flex",gap:10,alignItems:"flex-start"}}
-                  onMouseOver={ev=>ev.currentTarget.style.background="#1e3045"}
-                  onMouseOut={ev=>ev.currentTarget.style.background="transparent"}>
-                  <div style={{flexShrink:0,minWidth:90}}>
-                    <div style={{fontSize:"0.64rem",color:sc(e.sistema),fontWeight:700,background:sc(e.sistema)+"22",borderRadius:4,padding:"2px 6px",marginBottom:3}}>{e.sistema}</div>
-                    <div style={{fontSize:"0.68rem",color:mut}}>item {e.code}</div>
+              {baseFiltered.map(e=>{
+                const sel = baseSelected.has(e.i);
+                return (
+                  <div key={e.i}
+                    onClick={()=>{
+                      const ns = new Set(baseSelected);
+                      sel ? ns.delete(e.i) : ns.add(e.i);
+                      setBaseSelected(ns);
+                    }}
+                    style={{padding:"8px 18px",cursor:"pointer",borderBottom:`1px solid ${brd}22`,
+                      display:"flex",gap:10,alignItems:"center",
+                      background:sel?"#1a2e45":"transparent"}}
+                    onMouseOver={ev=>{if(!sel)ev.currentTarget.style.background="#1e3045";}}
+                    onMouseOut={ev=>{if(!sel)ev.currentTarget.style.background="transparent";}}>
+                    {/* Checkbox visual */}
+                    <div style={{width:16,height:16,borderRadius:4,flexShrink:0,
+                      border:`2px solid ${sel?"#3b88c3":brd}`,
+                      background:sel?"#3b88c3":"transparent",
+                      display:"flex",alignItems:"center",justifyContent:"center"}}>
+                      {sel && <div style={{color:"#fff",fontSize:"0.7rem",fontWeight:700,lineHeight:1}}>v</div>}
+                    </div>
+                    <div style={{flexShrink:0,minWidth:100}}>
+                      <div style={{fontSize:"0.64rem",color:sc(e.sistema),fontWeight:700,background:sc(e.sistema)+"22",borderRadius:4,padding:"1px 6px",marginBottom:2,display:"inline-block"}}>{e.sistema}</div>
+                      <div style={{fontSize:"0.65rem",color:mut}}>{e.code} {e.local ? "· "+e.local : ""}</div>
+                    </div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:"0.75rem",color:saved[e.i]?"#4dcb8a":tx,fontWeight:saved[e.i]?700:400,
+                        overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.label}</div>
+                      {e.descricao && <div style={{fontSize:"0.63rem",color:mut,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.descricao.slice(0,60)}</div>}
+                    </div>
+                    {saved[e.i] && <div style={{fontSize:"0.62rem",color:"#4dcb8a",flexShrink:0}}>preenchido</div>}
                   </div>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:"0.76rem",color:saved[e.i]?"#4dcb8a":tx,fontWeight:saved[e.i]?700:400}}>{e.label}</div>
-                    <div style={{fontSize:"0.65rem",color:mut,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.local}{e.descricao?" - "+e.descricao.slice(0,50):""}</div>
-                  </div>
-                  {saved[e.i]&&<div style={{fontSize:"0.62rem",color:"#4dcb8a",flexShrink:0,paddingTop:2}}>preenchido</div>}
-                </div>
-              ))}
+                );
+              })}
             </div>
-            <div style={{padding:"8px 18px",borderTop:`1px solid ${brd}`,flexShrink:0,fontSize:"0.65rem",color:mut}}>
-              Clique no item de destino para copiar o preenchimento atual para ele e navegar ate la.
+
+            {/* Footer */}
+            <div style={{padding:"10px 18px",borderTop:`1px solid ${brd}`,flexShrink:0,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div style={{fontSize:"0.65rem",color:mut}}>
+                Selecione os itens destino e clique em "Copiar para X item(s)"
+              </div>
+              {baseSelected.size > 0 && (
+                <Btn v="s" sx={{padding:"6px 18px",fontSize:"0.8rem"}}
+                  onClick={()=>aplicarBase([...baseSelected])}>
+                  Copiar para {baseSelected.size} item(s)
+                </Btn>
+              )}
             </div>
           </div>
         </div>
