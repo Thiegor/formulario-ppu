@@ -11,12 +11,21 @@ const SB_HEADERS = {
 };
 
 function getUserKey() {
-  let k = localStorage.getItem("ppu_user_key");
-  if (!k) {
-    k = prompt("Seu nome (sera usado para identificar seu preenchimento):", "") || "anonimo";
-    localStorage.setItem("ppu_user_key", k);
-  }
-  return k;
+  return localStorage.getItem("ppu_user_key") || "";
+}
+
+function setUserKey(nome) {
+  localStorage.setItem("ppu_user_key", nome);
+}
+
+async function listarUsuarios() {
+  try {
+    const res = await fetch(
+      SUPABASE_URL + "/rest/v1/ppu_respostas?select=usuario,progresso,ultimo_salvamento&order=ultimo_salvamento.desc",
+      { headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY } }
+    );
+    return await res.json();
+  } catch(e) { return []; }
 }
 
 async function saveToSheets(payload) {
@@ -949,34 +958,58 @@ export default function App() {
   const [syncStatus, setSyncStatus] = useState("loading");
   const [baseModal, setBaseModal] = useState(false);
   const [baseSearch, setBaseSearch] = useState("");
+  // Usuario ativo
+  const [usuario, setUsuario]     = useState(getUserKey);
+  const [userModal, setUserModal] = useState(!getUserKey()); // abre na primeira vez
+  const [usuariosList, setUsuariosList] = useState([]);
+  const [novoNome, setNovoNome]   = useState("");
   const [baseSelected, setBaseSelected] = useState(new Set()); // indices selecionados no modal
   const [baseSisFiltro, setBaseSisFiltro] = useState("ALL");   // filtro de sistema no modal
   const topRef    = useRef(null);
   const timerRef  = useRef(null);
 
-  // Load on mount - tenta recuperar preenchimento do Google Sheets
-  useEffect(() => {
-    async function load() {
-      setSyncStatus("loading");
-      try {
-        const d = await loadFromSheets();
-        console.log("[PPU] load keys:", d ? Object.keys(d) : null);
-        if (d) {
-          if (d.extras && Array.isArray(d.extras)) {
-            const base = QUEUE.map((_,i) => d.extras[i] ? {...BLANK,...d.extras[i]} : {...BLANK});
-            setExtras(base);
-            console.log("[PPU] extras loaded:", d.extras.length);
-          }
-          if (d.saved && Array.isArray(d.saved)) {
-            const baseSaved = QUEUE.map((_,i) => d.saved[i] === true);
-            setSaved(baseSaved);
-            console.log("[PPU] saved loaded:", d.saved.filter(Boolean).length, "itens");
-          }
+  // Carrega dados de um usuario especifico
+  async function loadUser(nome) {
+    if (!nome) return;
+    setSyncStatus("loading");
+    setExtras(QUEUE.map(() => ({...BLANK})));
+    setSaved(QUEUE.map(() => false));
+    try {
+      const res = await fetch(
+        SUPABASE_URL + "/rest/v1/ppu_respostas?usuario=eq." + encodeURIComponent(nome) + "&select=extras,saved",
+        { headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY } }
+      );
+      const rows = await res.json();
+      if (rows && rows.length > 0) {
+        const row = rows[0];
+        if (row.extras && Array.isArray(row.extras)) {
+          setExtras(QUEUE.map((_,i) => row.extras[i] ? {...BLANK,...row.extras[i]} : {...BLANK}));
         }
-      } catch(e) { console.warn("[PPU] Erro ao carregar:", e); }
+        if (row.saved && Array.isArray(row.saved)) {
+          setSaved(QUEUE.map((_,i) => row.saved[i] === true));
+        }
+      }
+    } catch(e) { console.warn("[PPU] loadUser error:", e); }
+    setSyncStatus("idle");
+    setIdx(0);
+    setPage(1);
+  }
+
+  // Abre modal de usuario e lista usuarios existentes
+  async function abrirUserModal() {
+    setUserModal(true);
+    const lista = await listarUsuarios();
+    setUsuariosList(lista);
+  }
+
+  // Load on mount
+  useEffect(() => {
+    if (usuario) {
+      loadUser(usuario);
+    } else {
+      abrirUserModal();
       setSyncStatus("idle");
     }
-    load();
   }, []);
 
   // Debounced auto-save -> Google Sheets
@@ -1153,6 +1186,16 @@ export default function App() {
               <div style={{fontSize:"0.62rem",color:mut}}>RTT Solucoes Industriais - DADOS_SISTEMAS</div>
             </div>
             <div style={{display:"flex",alignItems:"center",gap:10}}>
+              {/* Indicador de usuario ativo */}
+              <div onClick={abrirUserModal}
+                style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",padding:"3px 10px",
+                  borderRadius:6,border:`1px solid ${brd}`,background:"#1e3045",
+                  fontSize:"0.7rem",color:sub}}
+                title="Trocar usuario">
+                <div style={{width:7,height:7,borderRadius:"50%",background:"#4dcb8a"}} />
+                <span style={{color:tx,fontWeight:700}}>{usuario || "sem usuario"}</span>
+                <span style={{fontSize:"0.62rem",color:mut}}>trocar</span>
+              </div>
               {syncStatus !== "idle" && (
                 <div style={{display:"flex",alignItems:"center",gap:5,fontSize:"0.68rem",color:statusDot.color}}>
                   <div style={{width:7,height:7,borderRadius:"50%",background:statusDot.color,animation:syncStatus==="saving"?"pulse 1s infinite":""}} />
@@ -1474,6 +1517,103 @@ export default function App() {
                 </Btn>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Selecao de usuario */}
+      {userModal && (
+        <div style={{position:"fixed",inset:0,background:"#000d",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+          <div style={{background:card,border:`1px solid ${brd}`,borderRadius:12,width:"100%",maxWidth:480,overflow:"hidden"}}>
+
+            {/* Header */}
+            <div style={{padding:"18px 20px",borderBottom:`1px solid ${brd}`}}>
+              <div style={{fontSize:"0.9rem",fontWeight:700,color:tx}}>Selecionar usuario</div>
+              <div style={{fontSize:"0.68rem",color:mut,marginTop:3}}>
+                Escolha um preenchimento existente ou crie um novo
+              </div>
+            </div>
+
+            {/* Lista de usuarios existentes */}
+            {usuariosList.length > 0 && (
+              <div style={{maxHeight:300,overflowY:"auto"}}>
+                <div style={{padding:"8px 20px 4px",fontSize:"0.62rem",color:mut,textTransform:"uppercase",letterSpacing:"0.1em"}}>
+                  Preenchimentos existentes
+                </div>
+                {usuariosList.map(u => (
+                  <div key={u.usuario}
+                    onClick={()=>{
+                      setUsuario(u.usuario);
+                      setUserKey(u.usuario);
+                      setUserModal(false);
+                      loadUser(u.usuario);
+                    }}
+                    style={{padding:"10px 20px",cursor:"pointer",borderBottom:`1px solid ${brd}22`,
+                      display:"flex",justifyContent:"space-between",alignItems:"center",
+                      background: usuario===u.usuario ? "#1a2e45" : "transparent"}}
+                    onMouseOver={ev=>ev.currentTarget.style.background="#1e3045"}
+                    onMouseOut={ev=>ev.currentTarget.style.background=usuario===u.usuario?"#1a2e45":"transparent"}>
+                    <div>
+                      <div style={{fontSize:"0.8rem",fontWeight:700,color:usuario===u.usuario?"#4dcb8a":tx}}>
+                        {u.usuario}
+                        {usuario===u.usuario && <span style={{fontSize:"0.65rem",marginLeft:6,color:"#4dcb8a"}}>(ativo)</span>}
+                      </div>
+                      <div style={{fontSize:"0.65rem",color:mut,marginTop:1}}>
+                        {u.progresso || "0 / 570"} salvos
+                        {u.ultimo_salvamento && <span style={{marginLeft:8}}>
+                          - {new Date(u.ultimo_salvamento).toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}
+                        </span>}
+                      </div>
+                    </div>
+                    <div style={{fontSize:"0.65rem",color:"#3b88c3",fontWeight:700}}>selecionar -></div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Criar novo */}
+            <div style={{padding:"14px 20px",borderTop:`1px solid ${brd}`}}>
+              <div style={{fontSize:"0.62rem",color:mut,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:8}}>
+                Novo preenchimento
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <Inp
+                  value={novoNome}
+                  placeholder="Nome do responsavel..."
+                  onChange={e=>setNovoNome(e.target.value)}
+                  onKeyDown={e=>{
+                    if(e.key==="Enter" && novoNome.trim()) {
+                      const nome = novoNome.trim();
+                      setUsuario(nome);
+                      setUserKey(nome);
+                      setUserModal(false);
+                      setNovoNome("");
+                      loadUser(nome);
+                    }
+                  }}
+                  sx={{fontSize:"0.8rem"}} />
+                <Btn v="s" sx={{whiteSpace:"nowrap",padding:"8px 16px"}}
+                  disabled={!novoNome.trim()}
+                  onClick={()=>{
+                    const nome = novoNome.trim();
+                    if (!nome) return;
+                    setUsuario(nome);
+                    setUserKey(nome);
+                    setUserModal(false);
+                    setNovoNome("");
+                    loadUser(nome);
+                  }}>
+                  Criar
+                </Btn>
+              </div>
+            </div>
+
+            {/* Fechar (só se ja tem usuario) */}
+            {usuario && (
+              <div style={{padding:"8px 20px",borderTop:`1px solid ${brd}`,textAlign:"right"}}>
+                <Btn v="g" sx={{fontSize:"0.75rem"}} onClick={()=>setUserModal(false)}>cancelar</Btn>
+              </div>
+            )}
           </div>
         </div>
       )}
