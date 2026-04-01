@@ -434,7 +434,7 @@ function DynList({items, onChange, cols, addLbl}) {
   );
 }
 
-const BLANK = {qtd_executar:"",linha_plan:"",status:"",descricao_extra:"",observacao:"",mao_de_obra:[],equipamentos:[],insumos:[],materiais:[],subcontratadas:[]};
+const BLANK = {qtd_executar:"",linha_plan:"",status:"",descricao_extra:"",observacao:"",soma_dre:true,sem_ini:"",sem_fim:"",mao_de_obra:[],equipamentos:[],insumos:[],materiais:[],subcontratadas:[]};
 
 // - helper: compute receita for one queue entry + its extra
 function calcReceita(entry, extra) {
@@ -745,7 +745,7 @@ function PageDRE({ extras }) {
   const [expandidos, setExpandidos] = useState({});
   const toggle = s => setExpandidos(p => ({...p,[s]:!p[s]}));
 
-  // Agrupa dados por sistema
+  // Agrupa dados por sistema - respeita flag soma_dre
   const sistemas = {};
   QUEUE.forEach((e, i) => {
     const extra = extras[i] || {...BLANK};
@@ -753,9 +753,12 @@ function PageDRE({ extras }) {
     if (!sistemas[s]) sistemas[s] = { items: [] };
     const pm = PRICE_MAP[e.code];
     const qtd = parseFloat(extra.qtd_executar) || parseFloat(e.qtd) || 0;
-    const recBruta = pm ? pm.price * qtd : 0;
+    const somaDRE = extra.soma_dre !== false; // default true
+    const recBruta = (pm && somaDRE) ? pm.price * qtd : 0;
     const { mo, op } = calcCustos(extra);
-    sistemas[s].items.push({ ...e, extra, recBruta, mo, op });
+    const moEfetivo = somaDRE ? mo : 0;
+    const opEfetivo = somaDRE ? op : 0;
+    sistemas[s].items.push({ ...e, extra, recBruta, mo: moEfetivo, op: opEfetivo, somaDRE });
   });
 
   // Agrega por sistema
@@ -944,6 +947,377 @@ function PageDRE({ extras }) {
     </div>
   );
 }
+// -- Página 4: Cronograma interativo (granularidade semanal) -----------
+const N_MESES   = 11;
+const N_SEMANAS = 44;
+const COL_W     = 22;
+const SPM       = 4;
+const LBL_W     = 260;
+const ROW_H     = 28;
+
+function semanasNoMes(si, sf, m) {
+  const from = Math.max(si, m*SPM);
+  const to   = Math.min(sf, m*SPM + SPM - 1);
+  return to >= from ? to - from + 1 : 0;
+}
+
+function calcReceitaMes(qitem, extra, mes) {
+  if (!extra || extra.soma_dre === false) return 0;
+  const si = extra.sem_ini !== "" && extra.sem_ini !== undefined ? parseInt(extra.sem_ini) : null;
+  const sf = extra.sem_fim !== "" && extra.sem_fim !== undefined ? parseInt(extra.sem_fim) : null;
+  if (si === null || sf === null) return 0;
+  const sems = semanasNoMes(si, sf, mes);
+  if (!sems) return 0;
+  const pm  = PRICE_MAP[qitem.code];
+  if (!pm) return 0;
+  const qtd = parseFloat(extra.qtd_executar) || parseFloat(qitem.qtd) || 0;
+  return (pm.price * qtd) * (sems / (sf - si + 1));
+}
+
+function calcCustosMes(extra, mes) {
+  if (!extra || extra.soma_dre === false) return { mo:0, op:0 };
+  const si = extra.sem_ini !== "" && extra.sem_ini !== undefined ? parseInt(extra.sem_ini) : null;
+  const sf = extra.sem_fim !== "" && extra.sem_fim !== undefined ? parseInt(extra.sem_fim) : null;
+  if (si === null || sf === null) return { mo:0, op:0 };
+  const sems = semanasNoMes(si, sf, mes);
+  if (!sems) return { mo:0, op:0 };
+  const frac = sems / (sf - si + 1);
+  const { mo, op } = calcCustos(extra);
+  return { mo: mo*frac, op: op*frac };
+}
+
+function PageCronograma({ extras, onUpdateExtra }) {
+  const [collapsed, setCollapsed] = useState({});
+  const [drag, setDrag]           = useState(null);
+  const [hovRow, setHovRow]       = useState(null);
+  const [activeTab, setActiveTab] = useState("gantt");
+  const gridRef = useRef(null);
+
+  const toggleCollapse = key => setCollapsed(p => ({...p,[key]:!p[key]}));
+
+  const tree = {};
+  QUEUE.forEach((e,i) => {
+    const s = e.sistema; const l = e.local || "(sem local)";
+    if (!tree[s]) tree[s] = {};
+    if (!tree[s][l]) tree[s][l] = [];
+    tree[s][l].push({...e, i});
+  });
+  const sisOrder = [...new Set(QUEUE.map(e=>e.sistema))];
+
+  const rows = [];
+  sisOrder.forEach(s => {
+    rows.push({type:'sis', key:s, label:s});
+    if (!collapsed[s]) {
+      Object.keys(tree[s]).sort().forEach(l => {
+        rows.push({type:'loc', key:s+"::"+l, label:l, sis:s});
+        if (!collapsed[s+"::"+l]) {
+          tree[s][l].forEach(e => rows.push({type:'item', key:"item_"+e.i, label:e.label, code:e.code, qitem:e, i:e.i}));
+        }
+      });
+    }
+  });
+
+  const onMD = (e, i, type) => {
+    e.preventDefault();
+    const ex = extras[i] || {};
+    const oi = ex.sem_ini !== "" && ex.sem_ini !== undefined ? parseInt(ex.sem_ini) : null;
+    const of_ = ex.sem_fim !== "" && ex.sem_fim !== undefined ? parseInt(ex.sem_fim) : null;
+    setDrag({ i, type, startX: e.clientX, origIni: oi, origFim: of_ });
+  };
+
+  const onMM = useCallback(e => {
+    if (!drag) return;
+    const dS = Math.round((e.clientX - drag.startX) / COL_W);
+    let ni = drag.origIni, nf = drag.origFim;
+    const MAX = N_SEMANAS - 1;
+    if (drag.type === 'move' && ni !== null && nf !== null) {
+      const dur = nf - ni;
+      ni = Math.max(0, Math.min(MAX - dur, ni + dS));
+      nf = ni + dur;
+    } else if (drag.type === 'resizeR' && nf !== null) {
+      nf = Math.max(ni ?? 0, Math.min(MAX, (drag.origFim ?? 0) + dS));
+    } else if (drag.type === 'resizeL' && ni !== null) {
+      ni = Math.max(0, Math.min(nf ?? MAX, (drag.origIni ?? 0) + dS));
+    } else if (drag.type === 'create') {
+      ni = drag.origIni;
+      nf = Math.max(ni, Math.min(MAX, ni + Math.max(0, dS)));
+    }
+    if (ni !== null && nf !== null) {
+      onUpdateExtra(drag.i, 'sem_ini', String(ni));
+      onUpdateExtra(drag.i, 'sem_fim', String(nf));
+    }
+  }, [drag, onUpdateExtra]);
+
+  const onMU = useCallback(() => setDrag(null), []);
+
+  useEffect(() => {
+    if (!drag) return;
+    window.addEventListener('mousemove', onMM);
+    window.addEventListener('mouseup', onMU);
+    return () => { window.removeEventListener('mousemove', onMM); window.removeEventListener('mouseup', onMU); };
+  }, [drag, onMM, onMU]);
+
+  const onCellClick = (i, sem) => {
+    if (drag) return;
+    const ex = extras[i] || {};
+    if (ex.sem_ini === "" || ex.sem_ini === undefined) {
+      onUpdateExtra(i, 'sem_ini', String(sem));
+      onUpdateExtra(i, 'sem_fim', String(sem));
+    }
+  };
+
+  const clearBlock = (e, i) => {
+    e.stopPropagation();
+    onUpdateExtra(i, 'sem_ini', '');
+    onUpdateExtra(i, 'sem_fim', '');
+  };
+
+  const dreByMes = Array.from({length:N_MESES}, (_, m) => {
+    let recBruta=0, mo=0, op=0;
+    QUEUE.forEach((e,i) => {
+      const ex = extras[i] || {};
+      recBruta += calcReceitaMes(e, ex, m);
+      const cc = calcCustosMes(ex, m);
+      mo += cc.mo; op += cc.op;
+    });
+    const deducoes = recBruta * DEDUCAO;
+    const recLiq   = recBruta - deducoes;
+    const custo    = mo + op;
+    const margem   = recLiq - custo;
+    return { recBruta, deducoes, recLiq, mo, op, custo, margem, mPct: recLiq>0?margem/recLiq*100:0 };
+  });
+
+  const dreTotal = dreByMes.reduce((a,d) => ({
+    recBruta:a.recBruta+d.recBruta, deducoes:a.deducoes+d.deducoes, recLiq:a.recLiq+d.recLiq,
+    mo:a.mo+d.mo, op:a.op+d.op, custo:a.custo+d.custo, margem:a.margem+d.margem,
+  }), {recBruta:0,deducoes:0,recLiq:0,mo:0,op:0,custo:0,margem:0});
+  dreTotal.mPct = dreTotal.recLiq > 0 ? dreTotal.margem/dreTotal.recLiq*100 : 0;
+
+  const totalW = LBL_W + N_SEMANAS * COL_W;
+  const nAlocados = QUEUE.filter((_,i) => { const e=extras[i]||{}; return e.sem_ini!==""&&e.sem_ini!==undefined; }).length;
+
+  return (
+    <div style={{padding:"12px 16px"}}>
+      <div style={{display:"flex",gap:0,marginBottom:14,borderBottom:`1px solid ${brd}`}}>
+        {[{k:"gantt",lbl:"Cronograma"},{k:"dre",lbl:"DRE Mes a Mes"}].map(t=>(
+          <div key={t.k} onClick={()=>setActiveTab(t.k)}
+            style={{padding:"7px 20px",fontSize:"0.76rem",fontWeight:700,cursor:"pointer",
+              borderBottom:`2px solid ${activeTab===t.k?"#4dcb8a":"transparent"}`,
+              color:activeTab===t.k?"#4dcb8a":sub}}>
+            {t.lbl}
+          </div>
+        ))}
+        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8,
+          paddingBottom:4,fontSize:"0.63rem",color:mut}}>
+          <span>{nAlocados} / {QUEUE.length} alocados</span>
+          <span>arrastar=mover</span>
+          <span>borda=esticar</span>
+          <span>clique=criar</span>
+        </div>
+      </div>
+
+      {activeTab === "gantt" && (
+        <div style={{overflowX:"auto",userSelect:"none"}} ref={gridRef}>
+          <div style={{minWidth:totalW+"px"}}>
+            <div style={{position:"sticky",top:0,zIndex:20,background:"#040c14",borderBottom:`2px solid ${brd}`}}>
+              <div style={{display:"flex"}}>
+                <div style={{width:LBL_W,flexShrink:0,padding:"4px 10px",fontSize:"0.65rem",
+                  fontWeight:700,color:mut,borderRight:`1px solid ${brd}`,borderBottom:`1px solid ${brd}22`}}>
+                  Sistema / Local / Item
+                </div>
+                {Array.from({length:N_MESES},(_,m)=>(
+                  <div key={m} style={{width:COL_W*SPM,flexShrink:0,textAlign:"center",
+                    borderRight:`1px solid ${brd}`,borderBottom:`1px solid ${brd}22`,padding:"4px 0",
+                    fontSize:"0.72rem",fontWeight:700,color:m===0?"#c47e2e":tx,
+                    background:m===0?"#1a1000":"#040c14"}}>M{m}</div>
+                ))}
+              </div>
+              <div style={{display:"flex"}}>
+                <div style={{width:LBL_W,flexShrink:0,borderRight:`1px solid ${brd}`}} />
+                {Array.from({length:N_SEMANAS},(_,s)=>(
+                  <div key={s} style={{width:COL_W,flexShrink:0,textAlign:"center",
+                    borderRight:`1px solid ${s%SPM===SPM-1?brd:brd+"22"}`,padding:"2px 0",
+                    fontSize:"0.55rem",color:mut,
+                    background:Math.floor(s/SPM)%2===0?"#040c14":"#060e18"}}>
+                    S{(s%SPM)+1}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {rows.map((row,ri) => {
+              const extra  = row.type==='item' ? (extras[row.i]||{}) : null;
+              const si_    = extra && extra.sem_ini!==""&&extra.sem_ini!==undefined ? parseInt(extra.sem_ini) : null;
+              const sf_    = extra && extra.sem_fim!==""&&extra.sem_fim!==undefined ? parseInt(extra.sem_fim) : null;
+              const hasB   = si_ !== null && sf_ !== null;
+              const cor    = sc(row.type==='sis'?row.key:row.type==='loc'?row.sis:row.qitem.sistema);
+              const isCol_ = collapsed[row.key];
+              const isHov_ = hovRow === row.key;
+
+              if (row.type === 'sis') return (
+                <div key={row.key} onClick={()=>toggleCollapse(row.key)}
+                  style={{display:"flex",height:26,cursor:"pointer",
+                    background:isHov_?"#1a2030":"#0d1820",borderBottom:`1px solid ${brd}`}}>
+                  <div style={{width:LBL_W,flexShrink:0,display:"flex",alignItems:"center",gap:6,
+                    padding:"0 8px",borderRight:`1px solid ${brd}`,borderLeft:`3px solid ${cor}`}}
+                    onMouseOver={()=>setHovRow(row.key)} onMouseOut={()=>setHovRow(null)}>
+                    <span style={{fontSize:"0.68rem",color:mut,fontWeight:700}}>{isCol_?">":"v"}</span>
+                    <span style={{fontSize:"0.72rem",fontWeight:700,color:cor}}>{row.label}</span>
+                    <span style={{marginLeft:"auto",fontSize:"0.6rem",color:mut}}>
+                      {Object.values(tree[row.key]||{}).reduce((a,b)=>a+b.length,0)}
+                    </span>
+                  </div>
+                  {Array.from({length:N_SEMANAS},(_,s)=>(
+                    <div key={s} style={{width:COL_W,flexShrink:0,
+                      background:Math.floor(s/SPM)%2===0?"#0a0f17":"#080d14",
+                      borderRight:`1px solid ${s%SPM===SPM-1?brd+"44":brd+"11"}`}} />
+                  ))}
+                </div>
+              );
+
+              if (row.type === 'loc') return (
+                <div key={row.key} onClick={()=>toggleCollapse(row.key)}
+                  style={{display:"flex",height:24,cursor:"pointer",
+                    background:isHov_?"#141c28":"#0a1018",borderBottom:`1px solid ${brd}22`}}>
+                  <div style={{width:LBL_W,flexShrink:0,display:"flex",alignItems:"center",gap:6,
+                    padding:"0 8px 0 20px",borderRight:`1px solid ${brd}`}}
+                    onMouseOver={()=>setHovRow(row.key)} onMouseOut={()=>setHovRow(null)}>
+                    <span style={{fontSize:"0.63rem",color:mut}}>{isCol_?">":"v"}</span>
+                    <span style={{fontSize:"0.68rem",color:sub,fontWeight:700}}>{row.label}</span>
+                    <span style={{marginLeft:"auto",fontSize:"0.58rem",color:mut}}>
+                      {tree[row.sis]?.[row.label]?.length||0}
+                    </span>
+                  </div>
+                  {Array.from({length:N_SEMANAS},(_,s)=>(
+                    <div key={s} style={{width:COL_W,flexShrink:0,
+                      background:Math.floor(s/SPM)%2===0?"#080d14":"#060b11",
+                      borderRight:`1px solid ${s%SPM===SPM-1?brd+"44":brd+"11"}`}} />
+                  ))}
+                </div>
+              );
+
+              return (
+                <div key={row.key}
+                  style={{display:"flex",height:ROW_H,borderBottom:`1px solid ${brd}22`,
+                    background:isHov_?"#0d1825":ri%2===0?"#080d14":"#060b11"}}
+                  onMouseOver={()=>setHovRow(row.key)} onMouseOut={()=>setHovRow(null)}>
+                  <div style={{width:LBL_W,flexShrink:0,display:"flex",alignItems:"center",
+                    gap:4,padding:"0 6px 0 32px",borderRight:`1px solid ${brd}`}}>
+                    <div style={{width:5,height:5,borderRadius:"50%",background:cor,flexShrink:0}} />
+                    <div style={{minWidth:0,flex:1}}>
+                      <div style={{fontSize:"0.63rem",color:tx,overflow:"hidden",
+                        textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={row.label}>
+                        <span style={{color:mut,marginRight:3}}>{row.code}</span>
+                        {row.label.slice(0,28)}
+                      </div>
+                    </div>
+                    {hasB && (
+                      <div onClick={e=>clearBlock(e,row.i)}
+                        style={{fontSize:"0.6rem",color:mut,cursor:"pointer",flexShrink:0,
+                          padding:"1px 4px",borderRadius:3,border:`1px solid ${brd}`,lineHeight:1.2}}>
+                        x
+                      </div>
+                    )}
+                  </div>
+                  <div style={{position:"relative",display:"flex",flex:1,overflow:"hidden"}}>
+                    {Array.from({length:N_SEMANAS},(_,s)=>(
+                      <div key={s} onClick={()=>onCellClick(row.i, s)}
+                        style={{width:COL_W,flexShrink:0,height:"100%",cursor:"cell",
+                          borderRight:`1px solid ${s%SPM===SPM-1?brd+"33":brd+"11"}`,
+                          background:s<SPM?"#100800":"transparent"}} />
+                    ))}
+                    {hasB && (
+                      <div onMouseDown={e=>onMD(e, row.i, 'move')}
+                        style={{position:"absolute",left:si_*COL_W+1,
+                          width:Math.max(COL_W-2,(sf_-si_+1)*COL_W-2),
+                          top:3,height:ROW_H-6,background:cor+"77",
+                          border:`1.5px solid ${cor}`,borderRadius:3,cursor:"grab",
+                          display:"flex",alignItems:"center",overflow:"hidden",zIndex:2}}>
+                        <div onMouseDown={e=>{e.stopPropagation();onMD(e,row.i,'resizeL');}}
+                          style={{width:7,height:"100%",cursor:"w-resize",flexShrink:0,
+                            display:"flex",alignItems:"center",justifyContent:"center",
+                            background:cor+"bb"}}>
+                          <div style={{width:1.5,height:10,background:"#fff",borderRadius:1,opacity:0.7}} />
+                        </div>
+                        <div style={{flex:1,textAlign:"center",fontSize:"0.58rem",color:"#fff",
+                          fontWeight:700,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",
+                          padding:"0 1px",pointerEvents:"none"}}>
+                          {(sf_-si_+1)>2?`S${si_+1}-S${sf_+1}`:`S${si_+1}`}
+                        </div>
+                        <div onMouseDown={e=>{e.stopPropagation();onMD(e,row.i,'resizeR');}}
+                          style={{width:7,height:"100%",cursor:"e-resize",flexShrink:0,
+                            display:"flex",alignItems:"center",justifyContent:"center",
+                            background:cor+"bb"}}>
+                          <div style={{width:1.5,height:10,background:"#fff",borderRadius:1,opacity:0.7}} />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {activeTab === "dre" && (
+        <div style={{overflowX:"auto"}}>
+          <div style={{minWidth:200+N_MESES*90+90+"px"}}>
+            <div style={{display:"flex",borderBottom:`2px solid ${brd}`,background:"#040c14",
+              position:"sticky",top:0,zIndex:10}}>
+              <div style={{width:200,flexShrink:0,padding:"8px 12px",fontSize:"0.65rem",
+                fontWeight:700,color:mut,borderRight:`1px solid ${brd}`}}>Linha DRE</div>
+              {dreByMes.map((_,m)=>(
+                <div key={m} style={{width:90,flexShrink:0,textAlign:"right",padding:"8px 8px",
+                  fontSize:"0.7rem",fontWeight:700,borderRight:`1px solid ${brd}22`,
+                  color:m===0?"#c47e2e":tx,background:m===0?"#1a1000":"#040c14"}}>M{m}</div>
+              ))}
+              <div style={{width:90,flexShrink:0,textAlign:"right",padding:"8px 8px",
+                fontSize:"0.7rem",fontWeight:700,color:"#4dcb8a",
+                borderLeft:`1px solid ${brd}`}}>TOTAL</div>
+            </div>
+            {[
+              {k:"recBruta",lbl:"Receita Bruta",      bold:true, color:tx},
+              {k:"deducoes",lbl:"(-) Deducoes 14,25%",bold:false,color:"#c47e2e",neg:true},
+              {k:"recLiq",  lbl:"Receita Liquida",     bold:true, color:tx,border:true},
+              {k:"custo",   lbl:"(-) Custo Total",     bold:true, color:"#c44a4a",neg:true,border:true},
+              {k:"mo",      lbl:"  Custo MO",          bold:false,color:"#c47e2e",neg:true},
+              {k:"op",      lbl:"  Custo Operacional", bold:false,color:"#c47e2e",neg:true},
+              {k:"margem",  lbl:"Margem Bruta (R$)",   bold:true, isMargem:true,border:true},
+              {k:"mPct",    lbl:"Margem Bruta (%)",    bold:true, isPct:true},
+            ].map((ln,li)=>(
+              <div key={ln.k} style={{display:"flex",borderBottom:`1px solid ${brd}22`,
+                background:ln.border?"#0d1820":li%2===0?"#080d14":"#060b11"}}>
+                <div style={{width:200,flexShrink:0,padding:"6px 12px",borderRight:`1px solid ${brd}`,
+                  fontSize:"0.73rem",fontWeight:ln.bold?700:400,color:ln.color||sub}}>
+                  {ln.lbl}
+                </div>
+                {dreByMes.map((d,m)=>{
+                  const v=d[ln.k];
+                  const disp=v===0?"-":ln.isPct?v.toFixed(1)+"%":"R$ "+fmtN(ln.neg?-v:Math.abs(v));
+                  const col=(ln.isMargem||ln.isPct)?(v>=0?"#4dcb8a":"#c44a4a"):ln.color||sub;
+                  return (
+                    <div key={m} style={{width:90,flexShrink:0,textAlign:"right",padding:"6px 8px",
+                      fontSize:"0.72rem",fontWeight:ln.bold?700:400,borderRight:`1px solid ${brd}22`,
+                      color:col,background:m===0?"#100800":"transparent"}}>{disp}</div>
+                  );
+                })}
+                <div style={{width:90,flexShrink:0,textAlign:"right",padding:"6px 8px",
+                  fontSize:"0.72rem",fontWeight:700,borderLeft:`1px solid ${brd}`,
+                  color:(ln.isMargem)?(dreTotal.margem>=0?"#4dcb8a":"#c44a4a"):
+                        (ln.isPct)?(dreTotal.mPct>=0?"#4dcb8a":"#c44a4a"):ln.color||sub}}>
+                  {dreTotal[ln.k]===0?"-":ln.isPct?dreTotal.mPct.toFixed(1)+"%":
+                   "R$ "+fmtN(ln.neg?-dreTotal[ln.k]:Math.abs(dreTotal[ln.k]))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Persistencia via Google Sheets - ver saveToSheets / loadFromSheets acima
 
 export default function App() {
@@ -1213,7 +1587,7 @@ export default function App() {
           </div>
           {/* Abas */}
           <div style={{display:"flex",gap:0}}>
-            {[{n:1,lbl:"Pagina 1 - Levantamento"},{n:2,lbl:"Pagina 2 - Consolidado"},{n:3,lbl:"Pagina 3 - DRE"}].map(t => (
+            {[{n:1,lbl:"Pagina 1 - Levantamento"},{n:2,lbl:"Pagina 2 - Consolidado"},{n:3,lbl:"Pagina 3 - DRE"},{n:4,lbl:"Pagina 4 - Cronograma"}].map(t => (
               <div key={t.n} onClick={()=>setPage(t.n)}
                 style={{padding:"8px 20px",fontSize:"0.75rem",fontWeight:700,cursor:"pointer",borderBottom:`2px solid ${page===t.n?"#4dcb8a":"transparent"}`,color:page===t.n?"#4dcb8a":sub,transition:"all .15s",letterSpacing:"0.04em"}}>
                 {t.lbl}
@@ -1231,6 +1605,13 @@ export default function App() {
       {/* - Pagina 3 - DRE */}
       {page === 3 && (
         <PageDRE extras={extras} />
+      )}
+
+      {/* - Pagina 4 - Cronograma */}
+      {page === 4 && (
+        <PageCronograma extras={extras} onUpdateExtra={(i,k,v)=>{
+          updateExtras(p=>{ const n=[...p]; n[i]={...(n[i]||{...BLANK}),[k]:v}; return n; });
+        }} />
       )}
 
       {/* - Pagina 1 - */}
@@ -1307,6 +1688,40 @@ export default function App() {
                 {cur.local && <div style={{background:"#1e3045",borderRadius:6,padding:"4px 10px",fontSize:"0.68rem",color:sub}}>{cur.local}</div>}
                 <div style={{background:"#1e3045",borderRadius:6,padding:"4px 10px",fontSize:"0.68rem",color:sub}}>Item {cur.code}</div>
                 {cur.status && <div style={{marginLeft:"auto",background:"#1a3d2e",borderRadius:6,padding:"4px 10px",fontSize:"0.68rem",color:"#4dcb8a"}}>{cur.status}</div>}
+                {/* Flag: soma na DRE */}
+                <div onClick={()=>setE("soma_dre", ext.soma_dre===false ? true : false)}
+                  style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",padding:"4px 10px",
+                    borderRadius:6,border:`1px solid ${ext.soma_dre===false?"#c44a4a44":"#4dcb8a44"}`,
+                    background:ext.soma_dre===false?"#2a1010":"#0d2a1a",
+                    fontSize:"0.68rem",fontWeight:700,
+                    color:ext.soma_dre===false?"#c44a4a":"#4dcb8a",
+                    userSelect:"none",marginLeft:ext.status?"0":"auto"}}>
+                  <div style={{width:8,height:8,borderRadius:"50%",background:ext.soma_dre===false?"#c44a4a":"#4dcb8a"}} />
+                  {ext.soma_dre===false ? "Excluido da DRE" : "Soma na DRE"}
+                </div>
+              </div>
+              {/* Alocacao no tempo: semana inicio e fim */}
+              <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:14,padding:"8px 12px",background:"#080f17",borderRadius:6,border:`1px solid ${brd}`}}>
+                <div style={{fontSize:"0.65rem",color:mut,textTransform:"uppercase",letterSpacing:"0.08em",whiteSpace:"nowrap"}}>Cronograma</div>
+                <div style={{display:"flex",gap:6,alignItems:"center",flex:1,flexWrap:"wrap"}}>
+                  <div style={{fontSize:"0.7rem",color:sub}}>Semana inicio</div>
+                  <select value={ext.sem_ini||""} onChange={e=>setE("sem_ini",e.target.value)}
+                    style={{background:"#1e3045",border:`1px solid ${brd}`,borderRadius:6,padding:"4px 8px",color:tx,fontSize:"0.74rem",outline:"none"}}>
+                    <option value="">--</option>
+                    {Array.from({length:44},(_,s)=><option key={s} value={String(s)}>S{s+1} (M{Math.floor(s/4)})</option>)}
+                  </select>
+                  <div style={{fontSize:"0.7rem",color:sub}}>Semana fim</div>
+                  <select value={ext.sem_fim||""} onChange={e=>setE("sem_fim",e.target.value)}
+                    style={{background:"#1e3045",border:`1px solid ${brd}`,borderRadius:6,padding:"4px 8px",color:tx,fontSize:"0.74rem",outline:"none"}}>
+                    <option value="">--</option>
+                    {Array.from({length:44},(_,s)=><option key={s} value={String(s)}>S{s+1} (M{Math.floor(s/4)})</option>)}
+                  </select>
+                  {ext.sem_ini!=="" && ext.sem_fim!=="" && (
+                    <div style={{fontSize:"0.65rem",color:ac,marginLeft:4}}>
+                      {parseInt(ext.sem_fim)-parseInt(ext.sem_ini)+1} sem / {(((parseInt(ext.sem_fim)-parseInt(ext.sem_ini))+1)/4).toFixed(1)} mes
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div style={{fontSize:"0.78rem",fontWeight:700,color:tx,marginBottom:4}}>{cur.label}</div>
