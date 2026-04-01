@@ -407,138 +407,7 @@ function SmartSection({ title, ac, items, onChange, sectionType, addLbl }) {
     </div>
 
       {/* HISTOGRAMA MO */}
-      {activeTab === "mo" && (()=>{
-        // Agrega MO por funcao por semana
-        const moFuncs = {};
-        QUEUE.forEach((e,i) => {
-          const ex = extras[i]||{};
-          if (ex.soma_dre===false) return;
-          const si_ = ex.sem_ini!==""&&ex.sem_ini!==undefined?parseInt(ex.sem_ini):null;
-          const sf_ = ex.sem_fim!==""&&ex.sem_fim!==undefined?parseInt(ex.sem_fim):null;
-          if (si_===null||sf_===null) return;
-          const dur = sf_-si_+1;
-          (ex.mao_de_obra||[]).forEach(r=>{
-            const fn = r.funcao||"(sem funcao)";
-            if (!fn) return;
-            const qtd = parseFloat(r.qtd||0);
-            if (!qtd) return;
-            if (!moFuncs[fn]) moFuncs[fn] = new Array(N_SEMANAS).fill(0);
-            for (let s=si_; s<=sf_; s++) moFuncs[fn][s] += qtd;
-          });
-        });
-        const funcs = Object.keys(moFuncs).sort();
-        if (!funcs.length) return (
-          <div style={{padding:40,textAlign:"center",color:mut,fontSize:"0.8rem"}}>
-            Nenhuma mao de obra alocada com cronograma preenchido e soma na DRE ativa.
-          </div>
-        );
-        // Max por semana para escala
-        const totBySem = Array.from({length:N_SEMANAS},(_,s)=>
-          funcs.reduce((a,fn)=>a+(moFuncs[fn][s]||0),0));
-        const maxTot = Math.max(...totBySem, 1);
-        const COLORS = ["#2e7fb8","#c47e2e","#4dcb8a","#8c6fd4","#c44a4a","#2e9c8c",
-          "#e08030","#5080c0","#a0c040","#c06080","#60a080","#8060a0"];
-        return (
-          <div style={{overflowX:"auto"}}>
-            <div style={{minWidth:LBL_W+N_SEMANAS*COL_W+"px"}}>
-              {/* Header duplo */}
-              <div style={{position:"sticky",top:0,zIndex:20,background:"#040c14",borderBottom:`2px solid ${brd}`}}>
-                <div style={{display:"flex"}}>
-                  <div style={{width:LBL_W,flexShrink:0,padding:"4px 10px",fontSize:"0.65rem",
-                    fontWeight:700,color:mut,borderRight:`1px solid ${brd}`,borderBottom:`1px solid ${brd}22`}}>
-                    Funcao
-                  </div>
-                  {Array.from({length:N_MESES},(_,m)=>(
-                    <div key={m} style={{width:COL_W*SPM,flexShrink:0,textAlign:"center",
-                      borderRight:`1px solid ${brd}`,borderBottom:`1px solid ${brd}22`,padding:"4px 0",
-                      fontSize:"0.72rem",fontWeight:700,color:m===0?"#c47e2e":tx,
-                      background:m===0?"#1a1000":"#040c14"}}>M{m}</div>
-                  ))}
-                </div>
-                <div style={{display:"flex"}}>
-                  <div style={{width:LBL_W,flexShrink:0,borderRight:`1px solid ${brd}`}} />
-                  {Array.from({length:N_SEMANAS},(_,s)=>(
-                    <div key={s} style={{width:COL_W,flexShrink:0,textAlign:"center",
-                      borderRight:`1px solid ${s%SPM===SPM-1?brd:brd+"22"}`,padding:"2px 0",
-                      fontSize:"0.55rem",color:mut,
-                      background:Math.floor(s/SPM)%2===0?"#040c14":"#060e18"}}>
-                      S{(s%SPM)+1}
-                    </div>
-                  ))}
-                </div>
-              </div>
-              {/* Total empilhado (mini barras) */}
-              <div style={{display:"flex",height:48,borderBottom:`1px solid ${brd}`,background:"#0a0f17"}}>
-                <div style={{width:LBL_W,flexShrink:0,display:"flex",alignItems:"center",
-                  padding:"0 10px",borderRight:`1px solid ${brd}`,
-                  fontSize:"0.65rem",fontWeight:700,color:tx}}>
-                  TOTAL (HH)
-                </div>
-                {Array.from({length:N_SEMANAS},(_,s)=>{
-                  const tot = totBySem[s];
-                  const pct = tot/maxTot;
-                  return (
-                    <div key={s} style={{width:COL_W,flexShrink:0,height:"100%",
-                      display:"flex",flexDirection:"column",justifyContent:"flex-end",
-                      borderRight:`1px solid ${s%SPM===SPM-1?brd+"44":brd+"11"}`,
-                      background:s<SPM?"#100800":"transparent",
-                      position:"relative"}}>
-                      {tot>0 && (
-                        <div style={{height:Math.max(2,pct*44)+"px",background:"#3b88c3",
-                          title:tot.toFixed(1)}} title={`S${s+1}: ${tot.toFixed(1)} HH`} />
-                      )}
-                      {tot>0 && pct>0.5 && (
-                        <div style={{position:"absolute",bottom:2,left:0,right:0,
-                          textAlign:"center",fontSize:"0.48rem",color:"#fff",pointerEvents:"none"}}>
-                          {Math.round(tot)}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-              {/* Linha por funcao */}
-              {funcs.map((fn,fi)=>(
-                <div key={fn} style={{display:"flex",height:ROW_H,borderBottom:`1px solid ${brd}22`,
-                  background:fi%2===0?"#080d14":"#060b11"}}>
-                  <div style={{width:LBL_W,flexShrink:0,display:"flex",alignItems:"center",gap:6,
-                    padding:"0 6px 0 12px",borderRight:`1px solid ${brd}`}}>
-                    <div style={{width:8,height:8,borderRadius:2,flexShrink:0,
-                      background:COLORS[fi%COLORS.length]}} />
-                    <div style={{fontSize:"0.65rem",color:tx,overflow:"hidden",
-                      textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{fn}</div>
-                  </div>
-                  {Array.from({length:N_SEMANAS},(_,s)=>{
-                    const v = moFuncs[fn][s]||0;
-                    const pct = v/maxTot;
-                    return (
-                      <div key={s} style={{width:COL_W,flexShrink:0,height:"100%",
-                        position:"relative",
-                        borderRight:`1px solid ${s%SPM===SPM-1?brd+"33":brd+"11"}`,
-                        background:s<SPM?"#100800":"transparent"}}>
-                        {v>0 && (
-                          <div style={{position:"absolute",bottom:0,left:1,right:1,
-                            height:Math.max(2,pct*(ROW_H-4))+"px",
-                            background:COLORS[fi%COLORS.length]+"99",
-                            borderRadius:"2px 2px 0 0"}}
-                            title={`${fn} S${s+1}: ${v.toFixed(1)} HH`} />
-                        )}
-                        {v>0 && pct>0.4 && (
-                          <div style={{position:"absolute",bottom:1,left:0,right:0,
-                            textAlign:"center",fontSize:"0.45rem",color:"#fff",
-                            pointerEvents:"none",zIndex:1}}>
-                            {Math.round(v)}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              ))}
-            </div>
-          </div>
-        );
-      })()}
+      {activeTab === "mo" && <PageHistogramaMO extras={extras} />}
     </div>
   );
 }
@@ -1083,6 +952,140 @@ function PageDRE({ extras }) {
     </div>
   );
 }
+function PageHistogramaMO({ extras }) {
+  const COLORS = ["#2e7fb8","#c47e2e","#4dcb8a","#8c6fd4","#c44a4a","#2e9c8c",
+    "#e08030","#5080c0","#a0c040","#c06080","#60a080","#8060a0"];
+
+  // Agrega MO por funcao por semana
+  const moFuncs = {};
+  QUEUE.forEach((e,i) => {
+    const ex = extras[i]||{};
+    if (ex.soma_dre===false) return;
+    const si_ = ex.sem_ini!==""&&ex.sem_ini!==undefined?parseInt(ex.sem_ini):null;
+    const sf_ = ex.sem_fim!==""&&ex.sem_fim!==undefined?parseInt(ex.sem_fim):null;
+    if (si_===null||sf_===null) return;
+    (ex.mao_de_obra||[]).forEach(r=>{
+      const fn = r.funcao||"(sem funcao)";
+      if (!fn) return;
+      const qtd = parseFloat(r.qtd||0);
+      if (!qtd) return;
+      if (!moFuncs[fn]) moFuncs[fn] = new Array(N_SEMANAS).fill(0);
+      for (let s=si_; s<=sf_; s++) moFuncs[fn][s] += qtd;
+    });
+  });
+  const funcs = Object.keys(moFuncs).sort();
+
+  if (!funcs.length) return (
+    <div style={{padding:40,textAlign:"center",color:mut,fontSize:"0.8rem"}}>
+      Nenhuma mao de obra alocada com cronograma preenchido e soma na DRE ativa.
+    </div>
+  );
+
+  const totBySem = Array.from({length:N_SEMANAS},(_,s)=>
+    funcs.reduce((a,fn)=>a+(moFuncs[fn][s]||0),0));
+  const maxTot = Math.max(...totBySem, 1);
+
+  return (
+    <div style={{overflowX:"auto"}}>
+      <div style={{minWidth:LBL_W+N_SEMANAS*COL_W+"px"}}>
+        {/* Header duplo */}
+        <div style={{position:"sticky",top:0,zIndex:20,background:"#040c14",borderBottom:`2px solid ${brd}`}}>
+          <div style={{display:"flex"}}>
+            <div style={{width:LBL_W,flexShrink:0,padding:"4px 10px",fontSize:"0.65rem",
+              fontWeight:700,color:mut,borderRight:`1px solid ${brd}`,borderBottom:`1px solid ${brd}22`}}>
+              Funcao
+            </div>
+            {Array.from({length:N_MESES},(_,m)=>(
+              <div key={m} style={{width:COL_W*SPM,flexShrink:0,textAlign:"center",
+                borderRight:`1px solid ${brd}`,borderBottom:`1px solid ${brd}22`,padding:"4px 0",
+                fontSize:"0.72rem",fontWeight:700,color:m===0?"#c47e2e":tx,
+                background:m===0?"#1a1000":"#040c14"}}>M{m}</div>
+            ))}
+          </div>
+          <div style={{display:"flex"}}>
+            <div style={{width:LBL_W,flexShrink:0,borderRight:`1px solid ${brd}`}} />
+            {Array.from({length:N_SEMANAS},(_,s)=>(
+              <div key={s} style={{width:COL_W,flexShrink:0,textAlign:"center",
+                borderRight:`1px solid ${s%SPM===SPM-1?brd:brd+"22"}`,padding:"2px 0",
+                fontSize:"0.55rem",color:mut,
+                background:Math.floor(s/SPM)%2===0?"#040c14":"#060e18"}}>
+                S{(s%SPM)+1}
+              </div>
+            ))}
+          </div>
+        </div>
+        {/* Linha de total */}
+        <div style={{display:"flex",height:48,borderBottom:`1px solid ${brd}`,background:"#0a0f17"}}>
+          <div style={{width:LBL_W,flexShrink:0,display:"flex",alignItems:"center",
+            padding:"0 10px",borderRight:`1px solid ${brd}`,
+            fontSize:"0.65rem",fontWeight:700,color:tx}}>
+            TOTAL (HH)
+          </div>
+          {Array.from({length:N_SEMANAS},(_,s)=>{
+            const tot = totBySem[s];
+            const pct = tot/maxTot;
+            return (
+              <div key={s} style={{width:COL_W,flexShrink:0,height:"100%",
+                display:"flex",flexDirection:"column",justifyContent:"flex-end",
+                borderRight:`1px solid ${s%SPM===SPM-1?brd+"44":brd+"11"}`,
+                background:s<SPM?"#100800":"transparent",position:"relative"}}>
+                {tot>0 && (
+                  <div style={{height:Math.max(2,pct*44)+"px",background:"#3b88c3"}}
+                    title={"S"+(s+1)+": "+tot.toFixed(1)+" HH"} />
+                )}
+                {tot>0 && pct>0.5 && (
+                  <div style={{position:"absolute",bottom:2,left:0,right:0,
+                    textAlign:"center",fontSize:"0.48rem",color:"#fff",pointerEvents:"none"}}>
+                    {Math.round(tot)}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        {/* Linhas por funcao */}
+        {funcs.map((fn,fi)=>(
+          <div key={fn} style={{display:"flex",height:ROW_H,borderBottom:`1px solid ${brd}22`,
+            background:fi%2===0?"#080d14":"#060b11"}}>
+            <div style={{width:LBL_W,flexShrink:0,display:"flex",alignItems:"center",gap:6,
+              padding:"0 6px 0 12px",borderRight:`1px solid ${brd}`}}>
+              <div style={{width:8,height:8,borderRadius:2,flexShrink:0,
+                background:COLORS[fi%COLORS.length]}} />
+              <div style={{fontSize:"0.65rem",color:tx,overflow:"hidden",
+                textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{fn}</div>
+            </div>
+            {Array.from({length:N_SEMANAS},(_,s)=>{
+              const v = moFuncs[fn][s]||0;
+              const pct = v/maxTot;
+              return (
+                <div key={s} style={{width:COL_W,flexShrink:0,height:"100%",
+                  position:"relative",
+                  borderRight:`1px solid ${s%SPM===SPM-1?brd+"33":brd+"11"}`,
+                  background:s<SPM?"#100800":"transparent"}}>
+                  {v>0 && (
+                    <div style={{position:"absolute",bottom:0,left:1,right:1,
+                      height:Math.max(2,pct*(ROW_H-4))+"px",
+                      background:COLORS[fi%COLORS.length]+"99",
+                      borderRadius:"2px 2px 0 0"}}
+                      title={fn+" S"+(s+1)+": "+v.toFixed(1)+" HH"} />
+                  )}
+                  {v>0 && pct>0.4 && (
+                    <div style={{position:"absolute",bottom:1,left:0,right:0,
+                      textAlign:"center",fontSize:"0.45rem",color:"#fff",
+                      pointerEvents:"none",zIndex:1}}>
+                      {Math.round(v)}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // -- Página 4: Cronograma interativo (granularidade semanal) -----------
 const N_MESES   = 11;
 const N_SEMANAS = 44;
