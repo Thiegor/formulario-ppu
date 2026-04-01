@@ -405,10 +405,6 @@ function SmartSection({ title, ac, items, onChange, sectionType, addLbl }) {
       ))}
       <Btn v="g" onClick={add} sx={{marginTop:4,fontSize:"0.74rem"}}>+ {addLbl}</Btn>
     </div>
-
-      {/* HISTOGRAMA MO */}
-      {activeTab === "mo" && <PageHistogramaMO extras={extras} />}
-    </div>
   );
 }
 
@@ -1300,7 +1296,7 @@ function PageCronograma({ extras, onUpdateExtra }) {
               const si_    = extra && extra.sem_ini!==""&&extra.sem_ini!==undefined ? parseInt(extra.sem_ini) : null;
               const sf_    = extra && extra.sem_fim!==""&&extra.sem_fim!==undefined ? parseInt(extra.sem_fim) : null;
               const hasB   = si_ !== null && sf_ !== null;
-              const cor    = sc(row.type==='sis'?row.key:row.type==='loc'?row.sis:row.qitem.sistema);
+              const cor    = sc(row.type==='sis'?row.key:row.type==='loc'?row.sis:row.type==='svc'?row.sis:row.qitem.sistema);
               const isCol_ = collapsed[row.key];
               const isHov_ = hovRow === row.key;
 
@@ -1522,6 +1518,9 @@ function PageCronograma({ extras, onUpdateExtra }) {
           </div>
         </div>
       )}
+
+      {/* HISTOGRAMA MO */}
+      {activeTab === "mo" && <PageHistogramaMO extras={extras} />}
     </div>
   );
 }
