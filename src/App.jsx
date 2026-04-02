@@ -1163,12 +1163,27 @@ function PageCronograma({ extras, onUpdateExtra }) {
     }
   });
 
+
+  // Calcula o maximo de semanas permitido para um item baseado no campo meses da MO
+  const getMaxSemanas = (i) => {
+    const ex = extras[i] || {};
+    const mo = ex.mao_de_obra || [];
+    if (!mo.length) return N_SEMANAS; // sem MO: sem restricao
+    const maxMeses = mo.reduce((mx, r) => {
+      const m = parseFloat(String(r.meses||0).replace(',','.')) || 0;
+      return Math.max(mx, m);
+    }, 0);
+    if (!maxMeses) return N_SEMANAS;
+    // Converte meses para semanas (arredonda para cima)
+    return Math.ceil(maxMeses * SPM);
+  };
+
   const onMD = (e, i, type) => {
     e.preventDefault();
     const ex = extras[i] || {};
     const oi = ex.sem_ini !== "" && ex.sem_ini !== undefined ? parseInt(ex.sem_ini) : null;
     const of_ = ex.sem_fim !== "" && ex.sem_fim !== undefined ? parseInt(ex.sem_fim) : null;
-    setDrag({ i, type, startX: e.clientX, origIni: oi, origFim: of_ });
+    setDrag({ i, type, startX: e.clientX, origIni: oi, origFim: of_, maxSem: getMaxSemanas(i) });
   };
 
   const onMM = useCallback(e => {
@@ -1176,17 +1191,20 @@ function PageCronograma({ extras, onUpdateExtra }) {
     const dS = Math.round((e.clientX - drag.startX) / COL_W);
     let ni = drag.origIni, nf = drag.origFim;
     const MAX = N_SEMANAS - 1;
+    const maxDur = (drag.maxSem || N_SEMANAS) - 1; // duracao maxima em semanas (0-indexed)
     if (drag.type === 'move' && ni !== null && nf !== null) {
       const dur = nf - ni;
       ni = Math.max(0, Math.min(MAX - dur, ni + dS));
       nf = ni + dur;
     } else if (drag.type === 'resizeR' && nf !== null) {
-      nf = Math.max(ni ?? 0, Math.min(MAX, (drag.origFim ?? 0) + dS));
+      const niCur = drag.origIni ?? 0;
+      nf = Math.max(niCur, Math.min(MAX, Math.min(niCur + maxDur, (drag.origFim ?? 0) + dS)));
     } else if (drag.type === 'resizeL' && ni !== null) {
-      ni = Math.max(0, Math.min(nf ?? MAX, (drag.origIni ?? 0) + dS));
+      const nfCur = drag.origFim ?? MAX;
+      ni = Math.max(0, Math.max(nfCur - maxDur, Math.min(nfCur, (drag.origIni ?? 0) + dS)));
     } else if (drag.type === 'create') {
       ni = drag.origIni;
-      nf = Math.max(ni, Math.min(MAX, ni + Math.max(0, dS)));
+      nf = Math.max(ni, Math.min(MAX, Math.min(ni + maxDur, ni + Math.max(0, dS))));
     }
     if (ni !== null && nf !== null) {
       onUpdateExtra(drag.i, 'sem_ini', String(ni));
@@ -1415,6 +1433,14 @@ function PageCronograma({ extras, onUpdateExtra }) {
                         {row.label.slice(0,26)}
                       </div>
                     </div>
+                    {/* Max semanas da MO */}
+                    {(()=>{const ms=getMaxSemanas(row.i); return ms<N_SEMANAS?(
+                      <div style={{fontSize:"0.52rem",color:"#c47e2e",flexShrink:0,
+                        padding:"1px 3px",borderRadius:2,border:"1px solid #c47e2e44",
+                        lineHeight:1.4}} title={"Limite MO: "+ms+" sem"}>
+                        {ms}s
+                      </div>
+                    ):null;})()}
                     {hasB && (
                       <div onClick={e=>clearBlock(e,row.i)}
                         style={{fontSize:"0.6rem",color:mut,cursor:"pointer",flexShrink:0,
