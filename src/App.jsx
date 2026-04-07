@@ -1537,6 +1537,8 @@ function PageHistogramaEQ({ extras }) {
   const COLORS = ["#c47e2e","#2e7fb8","#8c6fd4","#c44a4a","#4dcb8a","#2e9c8c",
     "#e08030","#5080c0","#a0c040","#c06080","#60a080","#8060a0"];
   const [subTab, setSubTab] = useState("qtd");
+  const ROW_EQ = 44; // altura maior para ver melhor as barras
+
   const eqQtd = {}; const eqCusto = {};
   QUEUE.forEach((e,i) => {
     const ex = extras[i]||{};
@@ -1552,24 +1554,39 @@ function PageHistogramaEQ({ extras }) {
       if (!qtd) return;
       const vu = r._manual?(parseFloat(r.vunit_manual)||0):(parseFloat(r.valor_unit)||0);
       const custoTotal = vu*qtd;
-      if (!eqQtd[nome]) eqQtd[nome] = new Array(N_SEMANAS).fill(0);
+      if (!eqQtd[nome])   eqQtd[nome]   = new Array(N_SEMANAS).fill(0);
       if (!eqCusto[nome]) eqCusto[nome] = new Array(N_SEMANAS).fill(0);
-      for (let s=si_; s<=sf_; s++) { eqQtd[nome][s]+=qtd; eqCusto[nome][s]+=custoTotal/dur; }
+      for (let s=si_; s<=sf_; s++) {
+        eqQtd[nome][s]   += qtd;
+        eqCusto[nome][s] += custoTotal/dur;
+      }
     });
   });
+
   const nomes = Object.keys(eqQtd).sort();
-  const data = subTab==="qtd"?eqQtd:eqCusto;
-  const unit = subTab==="qtd"?"un":"R$";
+  const data  = subTab==="qtd" ? eqQtd : eqCusto;
+  const unit  = subTab==="qtd" ? "un" : "R$";
+
   if (!nomes.length) return (
     <div style={{padding:40,textAlign:"center",color:mut,fontSize:"0.8rem"}}>
       Nenhum equipamento alocado com cronograma preenchido e soma na DRE ativa.
     </div>
   );
-  const totBySem = Array.from({length:N_SEMANAS},(_,s)=>nomes.reduce((a,n)=>a+(data[n][s]||0),0));
-  const maxTot = Math.max(...totBySem, 1);
-  const fmtVal = v => subTab==="qtd"?v.toFixed(1):"R$ "+v.toLocaleString("pt-BR",{maximumFractionDigits:0});
+
+  const totBySem  = Array.from({length:N_SEMANAS},(_,s)=>nomes.reduce((a,n)=>a+(data[n][s]||0),0));
+  const totByMes  = Array.from({length:N_MESES},(_,m)=>
+    Array.from({length:SPM},(_,w)=>totBySem[m*SPM+w]).reduce((a,b)=>a+b,0)/SPM); // media do mes
+  const totByItem = nomes.reduce((acc,n)=>{acc[n]=data[n].reduce((a,b)=>a+b,0)/N_SEMANAS; return acc;},{});
+  const maxTot    = Math.max(...totBySem, 1);
+  const maxMes    = Math.max(...totByMes, 1);
+
+  const fmtVal = (v,compact=false) => subTab==="qtd"
+    ? (compact ? Math.round(v)+"" : v.toFixed(1))
+    : (compact ? fmtN(v) : "R$ "+v.toLocaleString("pt-BR",{maximumFractionDigits:0}));
+
   return (
     <div>
+      {/* Sub-abas */}
       <div style={{display:"flex",gap:0,marginBottom:0,borderBottom:`1px solid ${brd}`}}>
         {[{k:"qtd",lbl:"Quantidade (un)"},{k:"custo",lbl:"Custo (R$)"}].map(t=>(
           <div key={t.k} onClick={()=>setSubTab(t.k)}
@@ -1579,55 +1596,177 @@ function PageHistogramaEQ({ extras }) {
             {t.lbl}
           </div>
         ))}
-        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",fontSize:"0.63rem",color:mut,paddingRight:12}}>
+        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",
+          fontSize:"0.63rem",color:mut,paddingRight:12}}>
           {nomes.length} equipamentos
         </div>
       </div>
+
       <div style={{overflowX:"auto"}}>
         <div style={{minWidth:LBL_W+N_SEMANAS*COL_W+"px"}}>
+
+          {/* Header duplo meses + semanas */}
           <div style={{position:"sticky",top:0,zIndex:20,background:"#040c14",borderBottom:`2px solid ${brd}`}}>
             <div style={{display:"flex"}}>
-              <div style={{width:LBL_W,flexShrink:0,padding:"4px 10px",fontSize:"0.65rem",fontWeight:700,color:mut,borderRight:`1px solid ${brd}`,borderBottom:`1px solid ${brd}22`}}>Equipamento</div>
+              <div style={{width:LBL_W,flexShrink:0,padding:"4px 10px",fontSize:"0.65rem",
+                fontWeight:700,color:mut,borderRight:`1px solid ${brd}`,borderBottom:`1px solid ${brd}22`}}>
+                Equipamento / Total medio
+              </div>
               {Array.from({length:N_MESES},(_,m)=>(
-                <div key={m} style={{width:COL_W*SPM,flexShrink:0,textAlign:"center",borderRight:`1px solid ${brd}`,borderBottom:`1px solid ${brd}22`,padding:"4px 0",fontSize:"0.72rem",fontWeight:700,color:m===0?"#c47e2e":tx,background:m===0?"#1a1000":"#040c14"}}>M{m}</div>
+                <div key={m} style={{width:COL_W*SPM,flexShrink:0,textAlign:"center",
+                  borderRight:`1px solid ${brd}`,borderBottom:`1px solid ${brd}22`,padding:"4px 0",
+                  fontSize:"0.72rem",fontWeight:700,color:m===0?"#c47e2e":tx,
+                  background:m===0?"#1a1000":"#040c14"}}>M{m}</div>
               ))}
             </div>
             <div style={{display:"flex"}}>
               <div style={{width:LBL_W,flexShrink:0,borderRight:`1px solid ${brd}`}} />
               {Array.from({length:N_SEMANAS},(_,s)=>(
-                <div key={s} style={{width:COL_W,flexShrink:0,textAlign:"center",borderRight:`1px solid ${s%SPM===SPM-1?brd:brd+"22"}`,padding:"2px 0",fontSize:"0.55rem",color:mut,background:Math.floor(s/SPM)%2===0?"#040c14":"#060e18"}}>S{(s%SPM)+1}</div>
+                <div key={s} style={{width:COL_W,flexShrink:0,textAlign:"center",
+                  borderRight:`1px solid ${s%SPM===SPM-1?brd:brd+"22"}`,padding:"2px 0",
+                  fontSize:"0.55rem",color:mut,
+                  background:Math.floor(s/SPM)%2===0?"#040c14":"#060e18"}}>
+                  S{(s%SPM)+1}
+                </div>
               ))}
             </div>
           </div>
-          <div style={{display:"flex",height:48,borderBottom:`1px solid ${brd}`,background:"#0a0f17"}}>
-            <div style={{width:LBL_W,flexShrink:0,display:"flex",alignItems:"center",padding:"0 10px",borderRight:`1px solid ${brd}`,fontSize:"0.65rem",fontWeight:700,color:tx}}>TOTAL ({unit})</div>
+
+          {/* Linha total por semana (barra grande) */}
+          <div style={{display:"flex",height:56,borderBottom:`1px solid ${brd}`,background:"#0a0f17"}}>
+            <div style={{width:LBL_W,flexShrink:0,display:"flex",alignItems:"center",
+              justifyContent:"space-between",padding:"0 10px",borderRight:`1px solid ${brd}`}}>
+              <div style={{fontSize:"0.65rem",fontWeight:700,color:tx}}>TOTAL ({unit})</div>
+            </div>
             {Array.from({length:N_SEMANAS},(_,s)=>{
               const tot=totBySem[s]; const pct=tot/maxTot;
               return (
-                <div key={s} style={{width:COL_W,flexShrink:0,height:"100%",display:"flex",flexDirection:"column",justifyContent:"flex-end",borderRight:`1px solid ${s%SPM===SPM-1?brd+"44":brd+"11"}`,background:s<SPM?"#100800":"transparent",position:"relative"}}>
-                  {tot>0&&<div style={{height:Math.max(2,pct*44)+"px",background:"#c47e2e"}} title={"S"+(s+1)+": "+fmtVal(tot)} />}
-                  {tot>0&&pct>0.5&&<div style={{position:"absolute",bottom:2,left:0,right:0,textAlign:"center",fontSize:"0.45rem",color:"#fff",pointerEvents:"none"}}>{subTab==="qtd"?Math.round(tot):fmtN(tot)}</div>}
+                <div key={s} style={{width:COL_W,flexShrink:0,height:"100%",
+                  display:"flex",flexDirection:"column",justifyContent:"flex-end",
+                  borderRight:`1px solid ${s%SPM===SPM-1?brd+"44":brd+"11"}`,
+                  background:s<SPM?"#100800":"transparent",position:"relative"}}>
+                  {tot>0 && (
+                    <div style={{height:Math.max(3,pct*50)+"px",background:"#c47e2e",
+                      position:"relative"}}>
+                      {pct>0.25 && (
+                        <div style={{position:"absolute",top:1,left:0,right:0,textAlign:"center",
+                          fontSize:"0.52rem",color:"#fff",fontWeight:700,lineHeight:1}}>
+                          {fmtVal(tot,true)}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {tot>0 && pct<=0.25 && (
+                    <div style={{position:"absolute",bottom:"100%",left:0,right:0,
+                      textAlign:"center",fontSize:"0.48rem",color:"#c47e2e",lineHeight:1,
+                      marginBottom:1}}>
+                      {fmtVal(tot,true)}
+                    </div>
+                  )}
                 </div>
               );
             })}
           </div>
-          {nomes.map((nome,ni)=>(
-            <div key={nome} style={{display:"flex",height:ROW_H,borderBottom:`1px solid ${brd}22`,background:ni%2===0?"#080d14":"#060b11"}}>
-              <div style={{width:LBL_W,flexShrink:0,display:"flex",alignItems:"center",gap:6,padding:"0 6px 0 12px",borderRight:`1px solid ${brd}`}}>
-                <div style={{width:8,height:8,borderRadius:2,flexShrink:0,background:COLORS[ni%COLORS.length]}} />
-                <div style={{fontSize:"0.63rem",color:tx,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={nome}>{nome.slice(0,38)}</div>
+
+          {/* Linha total por MES (media) */}
+          <div style={{display:"flex",height:28,borderBottom:`2px solid ${brd}`,
+            background:"#0d1820"}}>
+            <div style={{width:LBL_W,flexShrink:0,display:"flex",alignItems:"center",
+              padding:"0 10px",borderRight:`1px solid ${brd}`}}>
+              <div style={{fontSize:"0.62rem",color:mut,fontStyle:"italic"}}>
+                media/semana por mes
               </div>
-              {Array.from({length:N_SEMANAS},(_,s)=>{
-                const v=data[nome][s]||0; const pct=v/maxTot;
-                return (
-                  <div key={s} style={{width:COL_W,flexShrink:0,height:"100%",position:"relative",borderRight:`1px solid ${s%SPM===SPM-1?brd+"33":brd+"11"}`,background:s<SPM?"#100800":"transparent"}}>
-                    {v>0&&<div style={{position:"absolute",bottom:0,left:1,right:1,height:Math.max(2,pct*(ROW_H-4))+"px",background:COLORS[ni%COLORS.length]+"99",borderRadius:"2px 2px 0 0"}} title={nome+" S"+(s+1)+": "+fmtVal(v)} />}
-                    {v>0&&pct>0.5&&<div style={{position:"absolute",bottom:1,left:0,right:0,textAlign:"center",fontSize:"0.45rem",color:"#fff",pointerEvents:"none",zIndex:1}}>{subTab==="qtd"?Math.round(v):fmtN(v)}</div>}
-                  </div>
-                );
-              })}
             </div>
-          ))}
+            {Array.from({length:N_MESES},(_,m)=>{
+              const v = totByMes[m]; const pct = v/maxMes;
+              return (
+                <div key={m} style={{width:COL_W*SPM,flexShrink:0,
+                  display:"flex",alignItems:"center",justifyContent:"center",
+                  borderRight:`1px solid ${brd}`,position:"relative",
+                  background:m===0?"#100800":"#0d1820"}}>
+                  {v>0 && (
+                    <div style={{position:"absolute",bottom:0,left:2,right:2,
+                      height:Math.max(2,pct*24)+"px",
+                      background:"#c47e2e44",borderRadius:"2px 2px 0 0"}} />
+                  )}
+                  <div style={{fontSize:"0.65rem",fontWeight:700,
+                    color:v>0?"#c47e2e":mut,zIndex:1}}>
+                    {v>0 ? fmtVal(v,true) : "-"}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Linhas por equipamento */}
+          {nomes.map((nome,ni)=>{
+            const totAcum = data[nome].reduce((a,b)=>a+b,0);
+            const maxItem = Math.max(...data[nome], 1);
+            return (
+              <div key={nome} style={{display:"flex",height:ROW_EQ,
+                borderBottom:`1px solid ${brd}22`,
+                background:ni%2===0?"#080d14":"#060b11"}}>
+
+                {/* Label + total acumulado */}
+                <div style={{width:LBL_W,flexShrink:0,display:"flex",alignItems:"center",
+                  gap:6,padding:"0 8px 0 12px",borderRight:`1px solid ${brd}`}}>
+                  <div style={{width:8,height:8,borderRadius:2,flexShrink:0,
+                    background:COLORS[ni%COLORS.length]}} />
+                  <div style={{minWidth:0,flex:1}}>
+                    <div style={{fontSize:"0.63rem",color:tx,overflow:"hidden",
+                      textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={nome}>
+                      {nome.slice(0,34)}
+                    </div>
+                    <div style={{fontSize:"0.58rem",color:COLORS[ni%COLORS.length],
+                      marginTop:1}}>
+                      total: {fmtVal(totAcum/N_SEMANAS,true)} {unit}/sem em media
+                    </div>
+                  </div>
+                </div>
+
+                {/* Barras por semana */}
+                {Array.from({length:N_SEMANAS},(_,s)=>{
+                  const v   = data[nome][s]||0;
+                  const pct = v/maxTot; // escala global para comparar equipamentos
+                  const pctLocal = v/maxItem; // escala local para ver variacao interna
+                  return (
+                    <div key={s} style={{width:COL_W,flexShrink:0,height:"100%",
+                      position:"relative",
+                      borderRight:`1px solid ${s%SPM===SPM-1?brd+"33":brd+"11"}`,
+                      background:s<SPM?"#100800":"transparent"}}>
+                      {v>0 && (
+                        <div style={{position:"absolute",bottom:0,left:1,right:1,
+                          height:Math.max(3,pct*(ROW_EQ-6))+"px",
+                          background:COLORS[ni%COLORS.length]+"bb",
+                          borderRadius:"2px 2px 0 0",
+                          display:"flex",alignItems:"flex-start",
+                          justifyContent:"center",overflow:"hidden"}}
+                          title={nome+" S"+(s+1)+": "+fmtVal(v)}>
+                          {/* Numero dentro da barra se couber */}
+                          {pct*(ROW_EQ-6) > 14 && (
+                            <div style={{fontSize:"0.5rem",color:"#fff",fontWeight:700,
+                              marginTop:2,lineHeight:1}}>
+                              {fmtVal(v,true)}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {/* Numero acima da barra se pequena */}
+                      {v>0 && pct*(ROW_EQ-6) <= 14 && pct*(ROW_EQ-6) > 2 && (
+                        <div style={{position:"absolute",
+                          bottom:pct*(ROW_EQ-6)+2+"px",
+                          left:0,right:0,textAlign:"center",
+                          fontSize:"0.48rem",color:COLORS[ni%COLORS.length],
+                          fontWeight:700,lineHeight:1}}>
+                          {fmtVal(v,true)}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
