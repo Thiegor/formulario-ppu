@@ -948,7 +948,190 @@ function PageDRE({ extras }) {
     </div>
   );
 }
-function PageHistogramaMO({ extras }) {
+function PageHistogramaEQ({ extras }) {
+  const COLORS = ["#c47e2e","#2e7fb8","#8c6fd4","#c44a4a","#4dcb8a","#2e9c8c",
+    "#e08030","#5080c0","#a0c040","#c06080","#60a080","#8060a0"];
+  const [subTab, setSubTab] = useState("qtd"); // "qtd" | "custo"
+
+  // Agrega equipamentos por nome por semana: qtd e custo
+  const eqQtd   = {}; // nome -> [N_SEMANAS]
+  const eqCusto = {}; // nome -> [N_SEMANAS]
+
+  QUEUE.forEach((e,i) => {
+    const ex = extras[i]||{};
+    if (ex.soma_dre===false) return;
+    const si_ = ex.sem_ini!==""&&ex.sem_ini!==undefined?parseInt(ex.sem_ini):null;
+    const sf_ = ex.sem_fim!==""&&ex.sem_fim!==undefined?parseInt(ex.sem_fim):null;
+    if (si_===null||sf_===null) return;
+    const dur = sf_ - si_ + 1;
+    (ex.equipamentos||[]).forEach(r=>{
+      const nome = (r.item||"(sem nome)").trim();
+      if (!nome) return;
+      const qtd  = parseFloat(r.qtd||0);
+      if (!qtd) return;
+      // custo unitario
+      const vu = r._manual
+        ? (parseFloat(r.vunit_manual)||0)
+        : (parseFloat(r.valor_unit)||0);
+      const custoTotal = vu * qtd;
+      if (!eqQtd[nome])   eqQtd[nome]   = new Array(N_SEMANAS).fill(0);
+      if (!eqCusto[nome]) eqCusto[nome] = new Array(N_SEMANAS).fill(0);
+      // Distribui proporcionalmente pelas semanas do bloco
+      for (let s=si_; s<=sf_; s++) {
+        eqQtd[nome][s]   += qtd;
+        eqCusto[nome][s] += custoTotal / dur;
+      }
+    });
+  });
+
+  const nomes = Object.keys(eqQtd).sort();
+  const data  = subTab === "qtd" ? eqQtd : eqCusto;
+  const unit  = subTab === "qtd" ? "un" : "R$";
+
+  if (!nomes.length) return (
+    <div style={{padding:40,textAlign:"center",color:mut,fontSize:"0.8rem"}}>
+      Nenhum equipamento alocado com cronograma preenchido e soma na DRE ativa.
+    </div>
+  );
+
+  const totBySem = Array.from({length:N_SEMANAS},(_,s)=>
+    nomes.reduce((a,n)=>a+(data[n][s]||0),0));
+  const maxTot = Math.max(...totBySem, 1);
+
+  const fmtVal = v => subTab==="qtd"
+    ? v.toFixed(1)
+    : "R$ "+v.toLocaleString("pt-BR",{maximumFractionDigits:0});
+
+  return (
+    <div>
+      {/* Sub-abas Qtd / Custo */}
+      <div style={{display:"flex",gap:0,marginBottom:0,borderBottom:`1px solid ${brd}`}}>
+        {[{k:"qtd",lbl:"Quantidade (un)"},{k:"custo",lbl:"Custo (R$)"}].map(t=>(
+          <div key={t.k} onClick={()=>setSubTab(t.k)}
+            style={{padding:"5px 16px",fontSize:"0.72rem",fontWeight:700,cursor:"pointer",
+              borderBottom:`2px solid ${subTab===t.k?"#c47e2e":"transparent"}`,
+              color:subTab===t.k?"#c47e2e":mut}}>
+            {t.lbl}
+          </div>
+        ))}
+        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",
+          fontSize:"0.63rem",color:mut,paddingRight:12}}>
+          {nomes.length} equipamentos · {QUEUE.filter((_,i)=>{
+            const ex=extras[i]||{};
+            return ex.soma_dre!==false&&ex.sem_ini!==""&&ex.sem_ini!==undefined&&
+                   (ex.equipamentos||[]).length>0;
+          }).length} itens com alocacao
+        </div>
+      </div>
+
+      <div style={{overflowX:"auto"}}>
+        <div style={{minWidth:LBL_W+N_SEMANAS*COL_W+"px"}}>
+          {/* Header duplo meses + semanas */}
+          <div style={{position:"sticky",top:0,zIndex:20,background:"#040c14",
+            borderBottom:`2px solid ${brd}`}}>
+            <div style={{display:"flex"}}>
+              <div style={{width:LBL_W,flexShrink:0,padding:"4px 10px",
+                fontSize:"0.65rem",fontWeight:700,color:mut,
+                borderRight:`1px solid ${brd}`,borderBottom:`1px solid ${brd}22`}}>
+                Equipamento
+              </div>
+              {Array.from({length:N_MESES},(_,m)=>(
+                <div key={m} style={{width:COL_W*SPM,flexShrink:0,textAlign:"center",
+                  borderRight:`1px solid ${brd}`,borderBottom:`1px solid ${brd}22`,padding:"4px 0",
+                  fontSize:"0.72rem",fontWeight:700,color:m===0?"#c47e2e":tx,
+                  background:m===0?"#1a1000":"#040c14"}}>M{m}</div>
+              ))}
+            </div>
+            <div style={{display:"flex"}}>
+              <div style={{width:LBL_W,flexShrink:0,borderRight:`1px solid ${brd}`}} />
+              {Array.from({length:N_SEMANAS},(_,s)=>(
+                <div key={s} style={{width:COL_W,flexShrink:0,textAlign:"center",
+                  borderRight:`1px solid ${s%SPM===SPM-1?brd:brd+"22"}`,padding:"2px 0",
+                  fontSize:"0.55rem",color:mut,
+                  background:Math.floor(s/SPM)%2===0?"#040c14":"#060e18"}}>
+                  S{(s%SPM)+1}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Linha de total */}
+          <div style={{display:"flex",height:48,borderBottom:`1px solid ${brd}`,
+            background:"#0a0f17"}}>
+            <div style={{width:LBL_W,flexShrink:0,display:"flex",alignItems:"center",
+              padding:"0 10px",borderRight:`1px solid ${brd}`,
+              fontSize:"0.65rem",fontWeight:700,color:tx}}>
+              TOTAL ({unit})
+            </div>
+            {Array.from({length:N_SEMANAS},(_,s)=>{
+              const tot = totBySem[s];
+              const pct = tot/maxTot;
+              return (
+                <div key={s} style={{width:COL_W,flexShrink:0,height:"100%",
+                  display:"flex",flexDirection:"column",justifyContent:"flex-end",
+                  borderRight:`1px solid ${s%SPM===SPM-1?brd+"44":brd+"11"}`,
+                  background:s<SPM?"#100800":"transparent",position:"relative"}}>
+                  {tot>0 && (
+                    <div style={{height:Math.max(2,pct*44)+"px",background:"#c47e2e"}}
+                      title={"S"+(s+1)+": "+fmtVal(tot)} />
+                  )}
+                  {tot>0 && pct>0.5 && (
+                    <div style={{position:"absolute",bottom:2,left:0,right:0,
+                      textAlign:"center",fontSize:"0.45rem",color:"#fff",pointerEvents:"none"}}>
+                      {subTab==="qtd"?Math.round(tot):fmtN(tot)}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Linha por equipamento */}
+          {nomes.map((nome,ni)=>(
+            <div key={nome} style={{display:"flex",height:ROW_H,
+              borderBottom:`1px solid ${brd}22`,
+              background:ni%2===0?"#080d14":"#060b11"}}>
+              <div style={{width:LBL_W,flexShrink:0,display:"flex",alignItems:"center",
+                gap:6,padding:"0 6px 0 12px",borderRight:`1px solid ${brd}`}}>
+                <div style={{width:8,height:8,borderRadius:2,flexShrink:0,
+                  background:COLORS[ni%COLORS.length]}} />
+                <div style={{fontSize:"0.63rem",color:tx,overflow:"hidden",
+                  textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={nome}>
+                  {nome.slice(0,38)}
+                </div>
+              </div>
+              {Array.from({length:N_SEMANAS},(_,s)=>{
+                const v   = data[nome][s]||0;
+                const pct = v/maxTot;
+                return (
+                  <div key={s} style={{width:COL_W,flexShrink:0,height:"100%",
+                    position:"relative",
+                    borderRight:`1px solid ${s%SPM===SPM-1?brd+"33":brd+"11"}`,
+                    background:s<SPM?"#100800":"transparent"}}>
+                    {v>0 && (
+                      <div style={{position:"absolute",bottom:0,left:1,right:1,
+                        height:Math.max(2,pct*(ROW_H-4))+"px",
+                        background:COLORS[ni%COLORS.length]+"99",
+                        borderRadius:"2px 2px 0 0"}}
+                        title={nome+" S"+(s+1)+": "+fmtVal(v)} />
+                    )}
+                    {v>0 && pct>0.5 && (
+                      <div style={{position:"absolute",bottom:1,left:0,right:0,
+                        textAlign:"center",fontSize:"0.45rem",color:"#fff",
+                        pointerEvents:"none",zIndex:1}}>
+                        {subTab==="qtd"?Math.round(v):fmtN(v)}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
   const COLORS = ["#2e7fb8","#c47e2e","#4dcb8a","#8c6fd4","#c44a4a","#2e9c8c",
     "#e08030","#5080c0","#a0c040","#c06080","#60a080","#8060a0"];
 
@@ -1263,7 +1446,7 @@ function PageCronograma({ extras, onUpdateExtra }) {
   return (
     <div style={{padding:"12px 16px"}}>
       <div style={{display:"flex",gap:0,marginBottom:14,borderBottom:`1px solid ${brd}`}}>
-        {[{k:"gantt",lbl:"Cronograma"},{k:"dre",lbl:"DRE Mes a Mes"},{k:"mo",lbl:"Histograma MO"}].map(t=>(
+        {[{k:"gantt",lbl:"Cronograma"},{k:"dre",lbl:"DRE Mes a Mes"},{k:"mo",lbl:"Histograma MO"},{k:"eq",lbl:"Equipamentos"}].map(t=>(
           <div key={t.k} onClick={()=>setActiveTab(t.k)}
             style={{padding:"7px 20px",fontSize:"0.76rem",fontWeight:700,cursor:"pointer",
               borderBottom:`2px solid ${activeTab===t.k?"#4dcb8a":"transparent"}`,
@@ -1547,6 +1730,9 @@ function PageCronograma({ extras, onUpdateExtra }) {
 
       {/* HISTOGRAMA MO */}
       {activeTab === "mo" && <PageHistogramaMO extras={extras} />}
+
+      {/* HISTOGRAMA EQUIPAMENTOS */}
+      {activeTab === "eq" && <PageHistogramaEQ extras={extras} />}
     </div>
   );
 }
